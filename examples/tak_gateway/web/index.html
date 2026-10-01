@@ -240,8 +240,12 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <p class=hint>Shown in the page header and on both sides of the banner. PNG, JPEG, SVG or WebP; it is resized to 128 px here before upload.</p>
 </section>
 
-<section class=card><h2>System</h2>
-<div class=g><div><label class=l>Setup page password</label><input name=setup_password type=password></div></div>
+<section class=card><h2>System <small id=pwWarn class=hide style="color:var(--bad)">default password in use</small></h2>
+<div class=g>
+<div><label class=l>New web password</label><input name=setup_password type=password autocomplete=new-password minlength=6 maxlength=31 placeholder="blank keeps current"></div>
+<div><label class=l>Confirm password</label><input id=pw2 type=password autocomplete=new-password maxlength=31></div>
+</div>
+<p class=hint>Sign in to this page as <b>admin</b>. The default password is <b>meshcore</b>; change it before putting the gateway on a shared network. After a change your browser asks you to sign in again.</p>
 </section>
 </form>
 
@@ -514,6 +518,7 @@ async function loadForm(){
     if(cfg.key_passphrase)$('key_pass').value=cfg.key_passphrase;
     hasKey=[0,1,2].map(i=>cfg['ch'+i+'_haskey']==='1');
     for(let i=0;i<3;i++)V('ch'+i+'_key').value='';
+    V('setup_password').value='';$('pw2').value='';$('pwWarn').classList.toggle('hide',cfg.pw_default!=='1');
     syncPreset(false);setColor(cfg.cot_color||'#0010EB');detectMode();chanUi();applyBrand();setDirty(false);
   }catch(e){toast('Config load failed: '+e.message)}
 }
@@ -521,13 +526,19 @@ async function save(){
   const o={};
   for(const el of F.elements){if(!el.name)continue;o[el.name]=el.type==='checkbox'?(el.checked?'1':'0'):el.value}
   o.cot_icon=mode==='cus'?normIcon(o.cot_icon):'';
+  if(o.setup_password){
+    if(o.setup_password.length<6)return toast('Web password must be at least 6 characters');
+    if(o.setup_password!==$('pw2').value)return toast('The two passwords do not match');
+  }
   for(let i=0;i<3;i++){
     const k=keyHex(o['ch'+i+'_key']||'');
     if(k&&!/^([0-9a-f]{32}|[0-9a-f]{64})$/.test(k))return toast('Channel '+(i+1)+': the key must be 32 or 64 hex characters (or base64)');
     o['ch'+i+'_key']=k;
   }
   const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});
-  toast(await r.text());if(r.ok){setDirty(false);loadForm();refreshStatus()}
+  const t=await r.text();toast(t);
+  if(r.ok&&/sign in again/.test(t)){setDirty(false);return setTimeout(()=>location.reload(),2500)}
+  if(r.ok){setDirty(false);loadForm();refreshStatus()}
 }
 F.addEventListener('input',e=>{
   if(e.target.id==='q')return buildGrid();

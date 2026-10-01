@@ -18,6 +18,16 @@ static TakWeb* g_web = nullptr;
 static TakConfig* g_cfg = nullptr;
 static TakClient* g_client = nullptr;
 static void (*g_radio_cb)() = nullptr;
+static AsyncAuthenticationMiddleware g_auth;
+
+// Body callbacks run before middleware, so uploads must check credentials themselves;
+// the middleware then answers 401 once the body has been consumed.
+static bool authed(AsyncWebServerRequest* req) { return g_auth.allowed(req); }
+
+static void applyPassword(const char* pwd) {
+  g_auth.setPassword(pwd && pwd[0] ? pwd : "meshcore");
+  g_auth.generateHash();
+}
 
 static void sendGz(AsyncWebServerRequest* req, const char* type, const uint8_t* data, size_t len,
                    bool gz, const char* cache) {
@@ -102,6 +112,11 @@ void TakWeb::begin(TakConfig* cfg, TakClient* client, void (*on_radio_changed)()
   g_client = client;
   g_radio_cb = on_radio_changed;
   if (!g_server) g_server = new AsyncWebServer(80);
+  g_auth.setAuthType(AsyncAuthType::AUTH_DIGEST);
+  g_auth.setRealm("MeshCore TAK Gateway");
+  g_auth.setUsername("admin");
+  applyPassword(cfg ? cfg->prefs.setup_password : nullptr);
+  g_server->addMiddleware(&g_auth);
   setupRoutes();
 }
 
@@ -139,6 +154,7 @@ void TakWeb::setupRoutes() {
       [](AsyncWebServerRequest* req) {},
       nullptr,
       [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+        if (!authed(req)) return;
         if (!g_cfg) {
           req->send(500, "text/plain", "no cfg");
           return;
@@ -170,7 +186,14 @@ void TakWeb::setupRoutes() {
 
         setc(p.wifi_ssid, sizeof(p.wifi_ssid), "wifi_ssid", false);
         setc(p.wifi_psk, sizeof(p.wifi_psk), "wifi_psk", true);
-        setc(p.setup_password, sizeof(p.setup_password), "setup_password", false);
+        String pw_err;
+        if (jsonGet(body, "setup_password", v) && v.length()) {
+          if (v.length() < 6 || v.length() >= sizeof(p.setup_password)) {
+            pw_err = "\nWeb password not changed: use 6 to " + String(sizeof(p.setup_password) - 1) + " characters";
+          } else {
+            strcpy(p.setup_password, v.c_str());
+          }
+        }
         setc(p.tak_host, sizeof(p.tak_host), "tak_host", false);
         setc(p.channel_label, sizeof(p.channel_label), "channel_label", true);
         setc(p.name_prefix, sizeof(p.name_prefix), "name_prefix", true);
@@ -285,11 +308,15 @@ void TakWeb::setupRoutes() {
                               (p.advert_on && (strcmp(before.node_name, p.node_name) != 0 ||
                                                before.chat_lat != p.chat_lat || before.chat_lon != p.chat_lon));
         if (advert_changed) requestMeshAdvert();
+        if (strcmp(before.setup_password, p.setup_password) != 0) {
+          applyPassword(p.setup_password);
+          pw_err += "\nWeb password changed - sign in again with the new password";
+        }
 
         extern TakNodes tak_nodes;
         tak_nodes.markAllForResend();  // push the new styling on the next refresh tick
         String msg = link_changed ? "Saved - reconnecting to TAK" : "Saved - markers update within a few seconds";
-        req->send(200, "text/plain", msg + chat_err);
+        req->send(200, "text/plain", msg + chat_err + pw_err);
       });
 
   g_server->on("/logo.png", HTTP_GET, [](AsyncWebServerRequest* req) {
@@ -309,7 +336,7 @@ void TakWeb::setupRoutes() {
       nullptr,
       [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
         static File f;
-        if (!g_cfg) return;
+        if (!g_cfg || !authed(req)) return;
         if (total > 48 * 1024) {
           if (index == 0) req->send(413, "text/plain", "Logo too large (max 48 KB after resize)");
           return;
@@ -345,6 +372,7 @@ void TakWeb::setupRoutes() {
       [](AsyncWebServerRequest* req) {},
       nullptr,
       [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+        if (!authed(req)) return;
         if (!g_cfg) {
           req->send(500, "text/plain", "no cfg");
           return;
@@ -527,7 +555,6 @@ String TakWeb::configJson() const {
   if (_cfg) {
     j += "\"wifi_ssid\":\"" + jsonEsc(String(_cfg->prefs.wifi_ssid)) + "\",";
     j += "\"wifi_psk\":\"" + jsonEsc(String(_cfg->prefs.wifi_psk)) + "\",";
-    j += "\"setup_password\":\"" + jsonEsc(String(_cfg->prefs.setup_password)) + "\",";
     j += "\"tak_host\":\"" + jsonEsc(String(_cfg->prefs.tak_host)) + "\",";
     j += "\"tak_port\":\"" + String(_cfg->prefs.tak_port) + "\",";
     j += "\"channel_label\":\"" + jsonEsc(String(_cfg->prefs.channel_label)) + "\",";
@@ -563,6 +590,7 @@ String TakWeb::configJson() const {
     j += "\"public_room\":\"" + jsonEsc(String(p.public_room)) + "\",";
     j += "\"chat_lat\":\"" + (p.chat_lat || p.chat_lon ? String(p.chat_lat, 6) : String("")) + "\",";
     j += "\"chat_lon\":\"" + (p.chat_lat || p.chat_lon ? String(p.chat_lon, 6) : String("")) + "\",";
+    j += "\"pw_default\":\"" + String(strcmp(p.setup_password, "meshcore") == 0 ? 1 : 0) + "\",";
     j += "\"node_name\":\"" + jsonEsc(String(p.node_name)) + "\",";
     j += "\"advert_on\":\"" + String(p.advert_on ? 1 : 0) + "\",";
     j += "\"advert_hours\":\"" + String(p.advert_hours) + "\",";

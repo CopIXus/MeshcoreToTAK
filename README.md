@@ -42,10 +42,10 @@ python examples/tak_gateway/tools/build_web_assets.py
 
 ## Setup
 
-1. Power the gateway. With no Wi-Fi configured it starts an access point **`MeshCore-TAK-Setup`** (password `meshcoretak`). Join it and open <http://192.168.4.1>.
+1. Power the gateway. With no Wi-Fi configured it starts an access point **`MeshCore-TAK-Setup`** (password `meshcoretak`). Join it and open <http://192.168.4.1>. Sign in as **`admin`** with password **`meshcore`**, and set your own password under **System**.
 2. **Connection** — enter your Wi-Fi network and the TAK Server host and port. Once Wi-Fi joins, the page is also served on the device's LAN address (shown on the OLED).
 3. **Portal certificates** — in TAK Portal, create an Integration, assign it a `*_WRITE` group and **Download Certs**. Select the `.pem` and `.key` on the setup page and install. Use the host and port shown for your Integration.
-   - Portal keys are usually encrypted with 3DES (passphrase `atakatak`), which the ESP32 cannot decrypt. If installing from the page fails, install from a PC instead:
+   - Portal keys are usually encrypted with 3DES (passphrase `atakatak`), which the ESP32 cannot decrypt. If installing from the page fails, install from a PC instead (it asks for the web password):
      ```bash
      pip install cryptography
      python examples/tak_gateway/tools/install_certs_to_device.py <device-ip> <unzipped-cert-folder>
@@ -72,7 +72,8 @@ Any MeshCore node that includes its location in adverts will appear, for example
 ## Security notes
 
 - Client certificates, keys and chat channel secrets are stored in the device's flash only. Nothing secret is compiled into the firmware or kept in this repository; `.gitignore` excludes `*.key`, `*.p12` and `examples/tak_gateway/certs_converted/`.
-- The setup page is plain HTTP with no login, so anyone who can reach the device on your network can change its settings. Keep it on a trusted network. The setup access point uses the default password above and shuts off once the gateway joins Wi-Fi.
+- The whole setup page and API require a login (HTTP digest auth, user `admin`). Change the default `meshcore` password on first setup; the page warns until you do. The password is never sent back to the browser. Forgot it? Run `factory_reset` over serial.
+- The page is plain HTTP, so other settings still travel unencrypted on your LAN. Keep the gateway on a trusted network. The setup access point uses the default password above and shuts off once the gateway joins Wi-Fi.
 
 ## Source layout
 
