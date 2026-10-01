@@ -1,128 +1,91 @@
-## About MeshCore
+# MeshCore → TAK Gateway
 
-MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
+Firmware for a **Heltec WiFi LoRa 32 V3** that listens to a [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh and puts it on a **TAK Server**: nodes that advertise GPS become map markers, and MeshCore channel chat is bridged both ways with TAK GeoChat rooms. It connects over TLS using the client certificates from a **TAK Portal Integration**, and is set up entirely from a web page served by the device.
 
-## 🔍 What is MeshCore?
+This repository is a fork of MeshCore. The gateway lives in [`examples/tak_gateway/`](examples/tak_gateway/); everything else is upstream MeshCore (see [README.MeshCore.md](README.MeshCore.md)).
 
-MeshCore now supports a range of LoRa devices, allowing for easy flashing without the need to compile firmware manually. Users can flash a pre-built binary using tools like Adafruit ESPTool and interact with the network through a serial console.
-MeshCore provides the ability to create wireless mesh networks, similar to Meshtastic and Reticulum but with a focus on lightweight multi-hop packet routing for embedded projects. Unlike Meshtastic, which is tailored for casual LoRa communication, or Reticulum, which offers advanced networking, MeshCore balances simplicity with scalability, making it ideal for custom embedded solutions, where devices (nodes) can communicate over long distances by relaying messages through intermediate nodes. This is especially useful in off-grid, emergency, or tactical situations where traditional communication infrastructure is unavailable.
+## Features
 
-## ⚡ Key Features
+- **Map markers** — every MeshCore advert that carries a location becomes a CoT marker with one stable uid per node (latest position, not a trail). Optional name-prefix filter (e.g. only `tak_*` nodes), with the prefix optionally stripped from the callsign.
+- **Marker styling** — 2525 symbols, TAK Default iconset icons (render the same in ATAK, CloudTAK and TAK Portal), or spot-map dots with color; stale time, remarks, archive flag, and a live CoT preview.
+- **Chat bridge** — up to 3 MeshCore channels (private key or `#hashtag`) mapped to TAK chat rooms, both directions. Optionally mirrors the MeshCore Public channel into a TAK room (listen only). The gateway appears in TAK as a contact that can be messaged directly. The last 3 bridged messages are shown on the page and the OLED.
+- **Mesh advert** — the gateway can flood its own MeshCore advert with a name and location so it shows up in contact lists and on mesh maps, on a schedule or on demand.
+- **Customization** — page title (also shown on the OLED), identification banner, accent color and logo.
+- **OLED status pages** — TAK link, Wi-Fi, radio, nodes, chat.
 
-* Multi-Hop Packet Routing
-  * Devices can forward messages across multiple nodes, extending range beyond a single radio's reach.
-  * Supports up to a configurable number of hops to balance network efficiency and prevent excessive traffic.
-  * Nodes use fixed roles where "Companion" nodes are not repeating messages at all to prevent adverse routing paths from being used.
-* Supports LoRa Radios – Works with Heltec, RAK Wireless, and other LoRa-based hardware.
-* Decentralized & Resilient – No central server or internet required; the network is self-healing.
-* Low Power Consumption – Ideal for battery-powered or solar-powered devices.
-* Simple to Deploy – Pre-built example applications make it easy to get started.
+## Hardware
 
-## 🎯 What Can You Use MeshCore For?
+- Heltec WiFi LoRa 32 **V3** (ESP32-S3 + SX1262 + SSD1306 OLED)
+- A 2.4 GHz Wi-Fi network with internet access (NTP and the TAK Server)
 
-* Off-Grid Communication: Stay connected even in remote areas.
-* Emergency Response & Disaster Recovery: Set up instant networks where infrastructure is down.
-* Outdoor Activities: Hiking, camping, and adventure racing communication.
-* Tactical & Security Applications: Military, law enforcement, and private security use cases.
-* IoT & Sensor Networks: Collect data from remote sensors and relay it back to a central location.
+## Build and flash
 
-## 🚀 How to Get Started
-
-- Watch the [MeshCore QuickStart Playlist](https://www.youtube.com/watch?v=iaFltojJrAc&list=PLshzThxhw4O4WU_iZo3NmNZOv6KMrUuF9) by The Comms Channel
-- Watch the [MeshCore Technical Presentation](https://www.youtube.com/watch?v=OwmkVkZQTf4) by Liam Cottle.
-- Read through our [Frequently Asked Questions](./docs/faq.md) and [Documentation](https://docs.meshcore.io).
-- Flash the MeshCore firmware on a supported device.
-- Connect with a supported client.
-
-For developers:
-
-- Install [PlatformIO](https://docs.platformio.org) in [Visual Studio Code](https://code.visualstudio.com).
-- Clone and open the MeshCore repository in Visual Studio Code.
-- See the example applications you can modify and run:
-  - [Companion Radio](./examples/companion_radio) - For use with an external chat app, over BLE, USB or Wi-Fi.
-  - [KISS Modem](./examples/kiss_modem) - Serial KISS protocol bridge for host applications. ([protocol docs](./docs/kiss_modem_protocol.md))
-  - [Simple Repeater](./examples/simple_repeater) - Extends network coverage by relaying messages.
-  - [Simple Room Server](./examples/simple_room_server) - A simple BBS server for shared Posts.
-  - [Simple Secure Chat](./examples/simple_secure_chat) - Secure terminal based text communication between devices.
-  - [Simple Sensor](./examples/simple_sensor) - Remote sensor node with telemetry and alerting.
-
-The Simple Secure Chat example can be interacted with through the Serial Monitor in Visual Studio Code, or with a Serial USB Terminal on Android.
-
-## ⚡️ MeshCore Flasher
-
-We have prebuilt firmware ready to flash on supported devices.
-
-- Launch https://meshcore.io/flasher
-- Select a supported device
-- Flash one of the firmware types:
-  - Companion, Repeater or Room Server
-- Once flashing is complete, you can connect with one of the MeshCore clients below.
-
-## 📱 MeshCore Clients
-
-**Companion Firmware**
-
-The companion firmware can be connected to via BLE, USB or Wi-Fi depending on the firmware type you flashed.
-
-- Web: https://app.meshcore.nz
-- Android: https://play.google.com/store/apps/details?id=com.liamcottle.meshcore.android
-- iOS: https://apps.apple.com/us/app/meshcore/id6742354151?platform=iphone
-- NodeJS: https://github.com/liamcottle/meshcore.js
-- Python: https://github.com/fdlamotte/meshcore-cli
-
-**Repeater and Room Server Firmware**
-
-The repeater and room server firmware can be set up via USB in the web config tool.
-
-- https://config.meshcore.io
-
-They can also be managed via LoRa in the mobile app by using the Remote Management feature.
-
-## 🛠 Hardware Compatibility
-
-MeshCore is designed for devices listed in the [MeshCore Flasher](https://meshcore.io/flasher)
-
-## 📜 License
-
-MeshCore is open-source software released under the MIT License. You are free to use, modify, and distribute it for personal and commercial projects.
-
-## Contributing
-
-Please submit PR's using 'dev' as the base branch!
-For minor changes just submit your PR and we'll try to review it, but for anything more 'impactful' please open an Issue first and start a discussion. It is better to sound out what it is you want to achieve first, and try to come to a consensus on what the best approach is, especially when it impacts the structure or architecture of this codebase.
-
-Here are some general principles you should try to adhere to:
-* Keep it simple. Please, don't think like a high-level lang programmer. Think embedded, and keep code concise, without any unnecessary layers.
-* No dynamic memory allocation, except during setup/begin functions.
-* Use the same brace and indenting style that's in the core source modules. (A .clang-format is probably going to be added soon, but please do NOT retroactively re-format existing code. This just creates unnecessary diffs that make finding problems harder)
-
-Help us prioritize! Please react with thumbs-up to issues/PRs you care about most. We look at reaction counts when planning work.
-
-### Running unit tests
-
-To run unit tests, run the following command:
+Install [PlatformIO](https://platformio.org/), then from the repository root:
 
 ```bash
-pio test --environment native --verbose
+pio run -e Heltec_v3_tak_gateway -t upload
 ```
 
-## Road-Map / To-Do
+For a first flash or recovery, build a merged image and write it at `0x0`:
 
-There are a number of fairly major features in the pipeline, with no particular time-frames attached yet. In very rough chronological order:
-- [X] Companion radio: UI redesign
-- [X] Repeater + Room Server: add ACL's (like Sensor Node has)
-- [X] Standardise Bridge mode for repeaters
-- [ ] Repeater/Bridge: Standardise the Transport Codes for zoning/filtering
-- [X] Core + Repeater: enhanced zero-hop neighbour discovery
-- [ ] Core: round-trip manual path support
-- [ ] Companion + Apps: support for multiple sub-meshes (and 'off-grid' client repeat mode)
-- [ ] Core + Apps: support for LZW message compression
-- [ ] Core: dynamic CR (Coding Rate) for weak vs strong hops
-- [ ] Core: new framework for hosting multiple virtual nodes on one physical device
-- [ ] V2 protocol spec: discussion and consensus around V2 packet protocol, including path hashes, new encryption specs, etc
+```bash
+pio run -e Heltec_v3_tak_gateway -t mergebin
+```
 
-## 📞 Get Support
+Images are written to `.pio/build/Heltec_v3_tak_gateway/`.
 
-- Report bugs and request features on the [GitHub Issues](https://github.com/ripplebiz/MeshCore/issues) page.
-- Find additional guides and components on [my site](https://buymeacoffee.com/ripplebiz).
-- Join [MeshCore Discord](https://meshcore.gg) to chat with the developers and get help from the community.
+If you edit the setup page (`examples/tak_gateway/web/index.html`), regenerate the embedded assets before building (needs Python with Pillow; icon data is downloaded from CloudTAK on first run):
+
+```bash
+python examples/tak_gateway/tools/build_web_assets.py
+```
+
+## Setup
+
+1. Power the gateway. With no Wi-Fi configured it starts an access point **`MeshCore-TAK-Setup`** (password `meshcoretak`). Join it and open <http://192.168.4.1>.
+2. **Connection** — enter your Wi-Fi network and the TAK Server host and port. Once Wi-Fi joins, the page is also served on the device's LAN address (shown on the OLED).
+3. **Portal certificates** — in TAK Portal, create an Integration, assign it a `*_WRITE` group and **Download Certs**. Select the `.pem` and `.key` on the setup page and install. Use the host and port shown for your Integration.
+   - Portal keys are usually encrypted with 3DES (passphrase `atakatak`), which the ESP32 cannot decrypt. If installing from the page fails, install from a PC instead:
+     ```bash
+     pip install cryptography
+     python examples/tak_gateway/tools/install_certs_to_device.py <device-ip> <unzipped-cert-folder>
+     ```
+4. **MeshCore radio** — pick the preset that matches your mesh (US: 910.525 MHz, BW 62.5, SF 7, CR 5) or enter custom values.
+5. Enable **Send to TAK Server** and save. The status pill turns green when connected, and the Portal Integration shows Connected.
+
+Users subscribed to the matching `*_READ` group see the markers and chat.
+
+### Chat channels
+
+- Channel keys are entered on the setup page and stored only on the device; the API never returns them. Paste the 32-hex (or base64) secret from the MeshCore app's Share Channel screen, or use a `#hashtag` channel name, which needs no key.
+- Each channel maps to a TAK chat room (defaults to the channel name). Messages from TAK are sent on the mesh as `callsign: message`.
+
+### Trackers
+
+Any MeshCore node that includes its location in adverts will appear, for example a T-Beam or companion radio with GPS and advert location sharing enabled. Use a short advert interval for live movement.
+
+## Device controls
+
+- **Button** — click cycles OLED pages; long press prints the factory-reset hint.
+- **Serial (115200)** — `status`, `factory_reset`.
+
+## Security notes
+
+- Client certificates, keys and chat channel secrets are stored in the device's flash only. Nothing secret is compiled into the firmware or kept in this repository; `.gitignore` excludes `*.key`, `*.p12` and `examples/tak_gateway/certs_converted/`.
+- The setup page is plain HTTP with no login, so anyone who can reach the device on your network can change its settings. Keep it on a trusted network. The setup access point uses the default password above and shuts off once the gateway joins Wi-Fi.
+
+## Source layout
+
+| Path | Role |
+|------|------|
+| `examples/tak_gateway/main.cpp`, `MyMesh.*` | Entry point, mesh listener, chat channels, adverts |
+| `examples/tak_gateway/tak/` | Config, node table, CoT builder, TLS client, web server, OLED |
+| `examples/tak_gateway/web/index.html` | Setup page source (embedded via `TakWebAssets.h`) |
+| `examples/tak_gateway/tools/` | Asset builder and Portal certificate helpers |
+| `variants/heltec_v3/platformio.ini` | `Heltec_v3_tak_gateway` build environment |
+
+## Credits and license
+
+- [MeshCore](https://github.com/meshcore-dev/MeshCore) by the MeshCore developers — MIT, see [license.txt](license.txt).
+- Marker icons from [CloudTAK](https://github.com/dfpc-coe/CloudTAK) and the [CloudTAK-Data](https://github.com/dfpc-coe/CloudTAK-Data) Default iconset.
+- Gateway code is released under the same MIT license.

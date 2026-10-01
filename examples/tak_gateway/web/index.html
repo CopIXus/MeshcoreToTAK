@@ -1,0 +1,576 @@
+<!DOCTYPE html><html lang=en><head>
+<meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>MeshCore TAK Gateway</title>
+<style>
+:root{--bg:#0b1017;--card:#131a24;--card2:#19222f;--line:#253043;--text:#e6edf6;--muted:#8d9bb0;
+--acc:#3dd68c;--acc2:#2eb877;--bad:#ff6b7a;--warn:#f0c14a;--field:#0e141d;--fb:#33425a;--r:10px}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.4 "Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--text)}
+.wrap{max-width:760px;margin:0 auto;padding:0 14px 96px}
+header{position:sticky;top:0;z-index:5;background:rgba(11,16,23,.92);backdrop-filter:blur(6px);
+border-bottom:1px solid var(--line);margin:0 -14px 14px;padding:10px 14px;display:flex;align-items:center;gap:10px}
+header h1{font-size:1.05rem;margin:0;font-weight:700;flex:1}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:var(--card2);
+font-size:.75rem;font-weight:700;letter-spacing:.03em}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.dot.ok{background:var(--acc)}.dot.bad{background:var(--bad)}.dot.warn{background:var(--warn)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.card>h2{margin:0 0 12px;font-size:.9rem;font-weight:700;display:flex;align-items:center;gap:8px}
+.card>h2 small{margin-left:auto;font-weight:600;color:var(--muted);font-size:.72rem}
+h3{font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:16px 0 8px;font-weight:700}
+.hint{font-size:.78rem;color:var(--muted);margin:4px 0 0}
+.g{display:grid;gap:10px 12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.g.n{grid-template-columns:repeat(auto-fit,minmax(96px,1fr))}
+.full{grid-column:1/-1}
+label.l{display:block;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px}
+input,select,textarea{width:100%;background:var(--field);color:var(--text);border:1px solid var(--fb);border-radius:8px;
+padding:8px 10px;font:inherit;font-size:.92rem;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--acc)}
+input:disabled,select:disabled{opacity:.45}
+textarea{font:.78rem ui-monospace,Consolas,monospace;min-height:60px}
+button{border:0;border-radius:8px;padding:9px 14px;font:inherit;font-weight:700;font-size:.88rem;cursor:pointer;
+background:var(--acc);color:#05230f}
+button:hover{background:var(--acc2)}
+button.s{background:#223046;color:var(--text)}button.s:hover{background:#2b3b55}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;align-items:center}
+.sw{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.9rem;user-select:none}
+.sw input{display:none}
+.sw i{flex:none;width:38px;height:22px;border-radius:11px;background:#2a364a;position:relative;transition:.15s}
+.sw i:after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#c9d3e0;transition:.15s}
+.sw input:checked+i{background:var(--acc)}
+.sw input:checked+i:after{left:19px;background:#fff}
+.m{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+@media(max-width:480px){.m{grid-template-columns:repeat(2,1fr)}}
+input[type=range]{accent-color:var(--acc);padding:0;border:0;background:none}
+.m div{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.m b{display:block;font-size:.98rem}.m span{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:.84rem;margin-top:10px}
+.kv b{color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;padding-top:2px}
+.err{color:var(--bad)}
+.seg{display:flex;background:var(--field);border:1px solid var(--fb);border-radius:9px;padding:3px;gap:3px}
+.seg button{flex:1;background:none;color:var(--muted);padding:7px 6px;font-size:.82rem}
+.seg button.on{background:#26344b;color:var(--text)}
+.aff button.on[data-a=f]{background:#1d3f66;color:#9fd0ff}.aff button.on[data-a=h]{background:#5a1f27;color:#ffb3bc}
+.aff button.on[data-a=n]{background:#1d4a30;color:#a6f0c4}.aff button.on[data-a=u]{background:#56481a;color:#ffe89a}
+.ic{width:32px;height:32px;background:url(/icons.png) no-repeat;flex:none}
+.ic2{width:32px;height:32px;background:url(/iconset.png) no-repeat;flex:none}
+.ig{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px;max-height:300px;overflow:auto;padding:2px}
+.ig .gh{grid-column:1/-1;font-size:.66rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;font-weight:700;margin:6px 0 0}
+.t{display:flex;flex-direction:column;align-items:center;gap:4px;background:var(--card2);border:1px solid var(--line);
+border-radius:8px;padding:8px 4px 6px;color:var(--text);font-size:.68rem;font-weight:600;line-height:1.15;text-align:center}
+.t:hover{background:#202c3d}.t.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset;background:#17291f}
+.spot{width:22px;height:22px;border-radius:50%;border:2px solid #fff;margin:5px}
+.pv{display:flex;gap:14px;align-items:center;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px}
+.pvi{width:56px;height:56px;display:grid;place-items:center;background:#0d131b;border-radius:10px;flex:none}
+.pvi .ic{transform:scale(1.5)}
+.pvn{font-weight:700;font-size:1rem}.pvt{font:.78rem ui-monospace,Consolas,monospace;color:var(--muted)}
+.colr{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.colr input[type=color]{width:44px;height:38px;padding:2px;cursor:pointer}
+.sws{display:flex;gap:6px;flex-wrap:wrap}
+.sws button{width:26px;height:26px;padding:0;border-radius:6px;border:2px solid #0000}
+.sws button.on{border-color:#fff}
+.chips{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.chips button{padding:3px 8px;font-size:.72rem;background:#1f2a3b;color:var(--muted)}
+.chips button:hover{color:var(--text)}
+.dur{font-size:.72rem;color:var(--muted);margin-left:4px;font-weight:600;text-transform:none;letter-spacing:0}
+pre{margin:0;white-space:pre-wrap;word-break:break-all;font:.72rem ui-monospace,Consolas,monospace;color:#b9c7da;
+background:var(--field);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:220px;overflow:auto}
+details>summary{cursor:pointer;color:var(--muted);font-size:.8rem;font-weight:700;margin-top:14px}
+#bar{position:fixed;left:0;right:0;bottom:0;z-index:6;background:#101823;border-top:1px solid var(--line);
+padding:10px 14px;display:none}
+#bar.show{display:block}
+#bar .in{max-width:760px;margin:0 auto;display:flex;gap:8px;align-items:center}
+#bar span{flex:1;font-size:.85rem;color:var(--warn);font-weight:600}
+#toast{position:fixed;left:50%;bottom:74px;transform:translateX(-50%);background:#223046;color:var(--text);
+padding:9px 14px;border-radius:8px;font-size:.85rem;display:none;z-index:7;max-width:90vw;white-space:pre-wrap}
+.hide{display:none!important}
+header{padding:10px 14px 11px}
+header img{height:42px;width:auto;max-width:120px;object-fit:contain;border-radius:6px}
+.ht{flex:1;min-width:0}
+.ht h1{font-size:1.25rem;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ht small{display:block;font-size:.7rem;color:var(--muted);font-weight:600;letter-spacing:.05em;text-transform:uppercase}
+#banner{display:flex;align-items:center;justify-content:center;gap:12px;margin:-4px 0 12px;font-weight:700;
+letter-spacing:.04em;font-size:1.1rem;text-align:center}
+#banner img{height:34px;width:auto}
+input[type=color]{height:38px;padding:2px;cursor:pointer}
+.chn{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--card2)}
+.chh{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:.88rem}
+.kb{margin-left:auto;font-size:.72rem;font-weight:700}
+.cm{display:flex;gap:10px;align-items:baseline;padding:7px 10px;background:var(--card2);border:1px solid var(--line);
+border-radius:8px;margin-bottom:6px;font-size:.85rem}
+.cd{flex:none;font-size:.66rem;font-weight:700;padding:2px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.04em}
+.cd.mt{background:#1d3f66;color:#9fd0ff}.cd.tm{background:#1d4a30;color:#a6f0c4}
+.ct{flex:1;min-width:0;word-break:break-word}.ca{flex:none;font-size:.72rem;color:var(--muted)}
+.lg{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.lg img{max-height:64px;max-width:140px;background:#0d131b;border-radius:8px;padding:4px}
+</style></head><body><div class=wrap>
+<header><img id=hlogo class=hide alt=""><div class=ht><h1 id=htitle>MeshCore TAK Gateway</h1><small id=hsub class=hide>MeshCore TAK Gateway</small></div><span class=pill><span id=hdot class=dot></span><span id=hstate>…</span></span></header>
+<div id=banner class=hide><img class=bl alt=""><span id=btext></span><img class=bl alt=""></div>
+
+<section class=card><h2>Device status <small id=up></small></h2>
+<div class=m id=met></div><div class=kv id=kv></div><div id=serr class=err></div></section>
+
+<form id=f autocomplete=off>
+
+<section class=card><h2>Map marker (CoT)</h2>
+<div class=pv><div class=pvi id=pvIcon></div>
+<div style="min-width:0"><div class=pvn id=pvName></div><div class=pvt id=pvType></div><div class=hint id=pvMeta></div></div></div>
+
+<h3>Nodes &amp; callsign</h3>
+<div class=g>
+<label class="sw full"><input type=checkbox name=name_filter><i></i>Only send nodes whose name starts with the prefix</label>
+<div><label class=l>Name prefix</label><input name=name_prefix maxlength=15 placeholder=tak_></div>
+<label class=sw style="align-self:end;padding-bottom:8px"><input type=checkbox name=strip_prefix><i></i>Remove prefix from callsign</label>
+</div>
+
+<h3>Icon</h3>
+<div class=seg id=mode><button type=button data-m=sym>2525 symbol</button><button type=button data-m=mk>Marker</button><button type=button data-m=cus>Iconset</button></div>
+<div id=pSym style="margin-top:10px">
+<div class="seg aff" id=aff><button type=button data-a=f>Friendly</button><button type=button data-a=h>Hostile</button><button type=button data-a=n>Neutral</button><button type=button data-a=u>Unknown</button></div>
+<input id=q placeholder="Search symbols…" style="margin:8px 0">
+<div class=ig id=grid></div>
+</div>
+<div id=pMk class=hide style="margin-top:10px"><div class=ig id=mkgrid></div>
+<p class=hint>Spot map markers take the color below.</p></div>
+<div id=pCus class=hide style="margin-top:10px">
+<p class=hint style="margin:0 0 8px">Default iconset — built into ATAK, CloudTAK and TAK Portal, so these look the same everywhere.</p>
+<input id=q2 placeholder="Search icons…" style="margin-bottom:8px">
+<div class=ig id=setgrid></div>
+<label class=l style="margin-top:12px">Iconset path</label><input name=cot_icon maxlength=95 placeholder="iconset-uid/Group/icon.png">
+<p class=hint>Pick above, or paste a path from another iconset (uid:Group/icon also accepted). Other iconsets must be installed on every client.</p></div>
+
+<h3>Color</h3>
+<div class=colr><input type=color id=cp><input name=cot_color id=chex maxlength=7 style="width:96px" placeholder="#RRGGBB"><div class=sws id=sws></div></div>
+<div class=g style="margin-top:10px"><div><label class=l>Opacity <span class=dur id=opv></span></label><input type=range name=cot_opacity min=10 max=100 step=5></div></div>
+<p class=hint id=colHint></p>
+
+<h3>Timing</h3>
+<div class=g>
+<div><label class=l>Stale after <span class=dur id=d_stale_sec></span></label><input name=stale_sec type=number min=10 max=65535>
+<div class=chips data-f=stale_sec><button type=button data-v=60>1m</button><button type=button data-v=180>3m</button><button type=button data-v=300>5m</button><button type=button data-v=900>15m</button><button type=button data-v=3600>1h</button></div></div>
+<div><label class=l>Re-send every <span class=dur id=d_refresh_sec></span></label><input name=refresh_sec type=number min=10 max=65535>
+<div class=chips data-f=refresh_sec><button type=button data-v=30>30s</button><button type=button data-v=60>1m</button><button type=button data-v=300>5m</button></div></div>
+<div><label class=l>Remove after <span class=dur id=d_max_age_sec></span></label><input name=max_age_sec type=number min=60 max=65535>
+<div class=chips data-f=max_age_sec><button type=button data-v=1800>30m</button><button type=button data-v=7200>2h</button><button type=button data-v=21600>6h</button><button type=button data-v=50400>14h</button></div></div>
+</div>
+<p class=hint>Stale: when TAK greys the marker out. Remove: drop a node that has not advertised for this long (repeaters advert about every 12 h).</p>
+
+<h3>Details</h3>
+<div class=g>
+<div class=full><label class=l>Remarks</label><input name=cot_remarks maxlength=63></div>
+<div><label class=l>How</label><input name=cot_how list=hows maxlength=15></div>
+<label class=sw style="align-self:end;padding-bottom:8px"><input type=checkbox name=cot_archived><i></i>Archive on clients</label>
+</div>
+<datalist id=hows><option value=m-g>Machine GPS<option value=h-g-i-g-o>Human GIGO<option value=h-e>Human estimated<option value=m-f>Machine fused</datalist>
+
+<details><summary>Advanced · CoT type &amp; XML preview</summary>
+<div class=g style="margin-top:10px"><div class=full><label class=l>CoT type</label><input name=cot_type maxlength=31></div></div>
+<label class=l style="margin-top:10px">Message sent to TAK</label><pre id=xml></pre>
+</details>
+</section>
+
+<section class=card><h2>Gateway node <small id=advStat></small></h2>
+<div class=g>
+<div><label class=l>Node name</label><input name=node_name maxlength=31 placeholder=TAK-GW></div>
+<div><label class=l>Latitude</label><input name=chat_lat inputmode=decimal placeholder="e.g. 36.1627"></div>
+<div><label class=l>Longitude</label><input name=chat_lon inputmode=decimal placeholder="e.g. -86.7816"></div>
+</div>
+<p class=hint>Where this gateway is installed. Pasting "lat, lon" into Latitude fills both. Used for the mesh advert and the gateway's TAK contact.</p>
+<h3>Mesh advert</h3>
+<div class=g>
+<label class=sw style="align-self:end;padding-bottom:8px"><input type=checkbox name=advert_on><i></i>Advertise on the mesh</label>
+<div><label class=l>Every</label><select name=advert_hours><option value=1>1 hour</option><option value=3>3 hours</option><option value=6>6 hours</option><option value=12>12 hours</option><option value=24>24 hours</option><option value=48>48 hours</option></select></div>
+</div>
+<div class=row><button type=button onclick=advertNow()>Send advert now</button></div>
+<p class=hint>Floods a MeshCore advert with this name and location so the gateway shows up in contact lists and on mesh maps. Sent at boot once the clock is set, then on this interval.</p>
+</section>
+
+<section class=card><h2>MeshCore chat &harr; TAK <small id=chatStat></small></h2>
+<p class=hint style="margin:0 0 10px">Messages heard on these MeshCore channels are posted to a TAK chat room, and messages sent to that room in TAK go back out on the channel.</p>
+<div class=chn><div class=chh><label class=sw><input type=checkbox name=public_on><i></i>Public channel &rarr; TAK</label><span class=kb id=kbp></span></div>
+<div class=g><div><label class=l>TAK chat room</label><input name=public_room maxlength=31 placeholder=MeshCore></div></div>
+<p class=hint>Posts everything said on the MeshCore Public channel into this TAK room. Listen only: messages from TAK are not broadcast onto Public.</p></div>
+<div id=chans></div>
+<p class=hint><b>#name</b> channels need no key. Private channel keys (32 or 64 hex, base64 also accepted) are stored on this device only and are never shown again.</p>
+<h3>Gateway contact in TAK</h3>
+<div class=g>
+<div><label class=l>Callsign</label><input name=chat_callsign maxlength=39></div>
+</div>
+<p class=hint>TAK users can message this contact directly (goes to the first channel). It is placed at the gateway location set under Gateway node.</p>
+<h3>Recent messages</h3>
+<div id=chatLog></div>
+<div class=kv id=chatKv></div>
+</section>
+
+<section class=card><h2>Connection</h2>
+<label class=sw><input type=checkbox name=enabled><i></i>Send to TAK Server</label>
+<h3>Wi-Fi</h3>
+<div class=g><div><label class=l>SSID</label><input name=wifi_ssid></div><div><label class=l>Password</label><input name=wifi_psk type=password></div></div>
+<h3>TAK Server</h3>
+<div class=g>
+<div style="grid-column:span 2"><label class=l>Host</label><input name=tak_host placeholder=takserver.example.net></div>
+<div><label class=l>Port</label><input name=tak_port type=number min=1 max=65535></div>
+<div class=full><label class=l>Channel label</label><input name=channel_label placeholder="display only"></div>
+</div>
+<p class=hint>Use the host and port from your Portal Integration row.</p>
+</section>
+
+<section class=card><h2>MeshCore radio</h2>
+<div class="g n">
+<div><label class=l>Preset</label><select name=preset><option>US</option><option>EU</option><option>AU</option><option value=CUSTOM>Custom</option></select></div>
+<div><label class=l>MHz</label><input name=lora_freq></div><div><label class=l>BW kHz</label><input name=lora_bw></div>
+<div><label class=l>SF</label><input name=lora_sf></div><div><label class=l>CR</label><input name=lora_cr></div>
+</div>
+<p class=hint>Must match your mesh exactly. US preset: 910.525 MHz, BW 62.5, SF7, CR5.</p>
+</section>
+
+<section class=card><h2>Customization</h2>
+<div class=g>
+<div class=full><label class=l>Title</label><input name=ui_title maxlength=39 placeholder="MeshCore TAK Gateway">
+<p class=hint>Shown at the top of this page and on the device's OLED screen.</p></div>
+<label class="sw full"><input type=checkbox name=banner_on><i></i>Show identification banner</label>
+<div class=full><label class=l>Banner text</label><input name=banner_text maxlength=63 placeholder="County OEM · MeshCore gateway"></div>
+<div><label class=l>Banner color</label><input type=color name=banner_color></div>
+<div><label class=l>Accent color</label><input type=color name=accent></div>
+</div>
+<h3>Logo</h3>
+<div class=lg><img id=logoPv class=hide alt="logo">
+<div style="flex:1;min-width:200px"><input type=file id=logoFile accept="image/png,image/jpeg,image/svg+xml,image/webp">
+<div class=row><button type=button class=s onclick=removeLogo()>Remove logo</button></div></div></div>
+<p class=hint>Shown in the page header and on both sides of the banner. PNG, JPEG, SVG or WebP; it is resized to 128 px here before upload.</p>
+</section>
+
+<section class=card><h2>System</h2>
+<div class=g><div><label class=l>Setup page password</label><input name=setup_password type=password></div></div>
+</section>
+</form>
+
+<section class=card><h2>Portal certificates <small id=certBadge></small></h2>
+<p class=hint style="margin:0 0 10px">Select the Portal <b>.pem</b> and <b>.key</b>. Portal keys use 3DES which this device cannot decrypt;
+if install fails run <code>python examples/tak_gateway/tools/install_certs_to_device.py &lt;device-ip&gt; &lt;cert-folder&gt;</code> from a PC.</p>
+<div class=g><div class=full><input type=file id=certFiles multiple accept=".pem,.key,.crt,.cer"></div>
+<div><label class=l>Key passphrase</label><input id=key_pass type=password value=atakatak></div></div>
+<details><summary>Paste PEMs manually</summary>
+<label class=l style="margin-top:10px">CA PEM (optional)</label><textarea id=ca></textarea>
+<label class=l style="margin-top:8px">Client cert PEM</label><textarea id=cert></textarea>
+<label class=l style="margin-top:8px">Client key PEM</label><textarea id=key></textarea></details>
+<div class=row><button type=button onclick=installCerts()>Install certificates</button></div>
+</section>
+
+<section class=card><h2>Actions</h2>
+<div class=row style="margin-top:0"><button type=button onclick=testTak()>Test TAK connection</button>
+<button type=button class=s onclick=doReboot()>Reboot</button></div></section>
+</div>
+
+<div id=bar><div class=in><span>Unsaved changes</span><button type=button class=s onclick=loadForm()>Discard</button><button type=button onclick=save()>Save</button></div></div>
+<div id=toast></div>
+
+<script>
+const IX=__ICON_INDEX__,SZ=IX.sz,F=document.getElementById('f'),$=id=>document.getElementById(id);
+const PRESETS={US:[910.525,62.5,7,5],EU:[869.618,62.5,8,5],AU:[916.8,250,11,5]};
+const SWATCH=['#FFFFFF','#FFFF00','#FF7F00','#FF00FF','#FF0000','#8B4513','#00FF00','#00FFFF','#0010EB','#000000'];
+const MK=[['b-m-p-s-m','Spot map',null]].concat(IX.mk.map((m,i)=>[m[0],m[1],i]));
+let mode='sym',aff='f',sample='tak_Example',dirty=false,lastStatus={};
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function toast(t){const e=$('toast');e.textContent=t;e.style.display='block';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',4000)}
+function dur(s){s=+s||0;return s>=3600?(s/3600).toFixed(s%3600?1:0)+' h':s>=60?(s/60).toFixed(s%60?1:0)+' min':s+' s'}
+function pos(col,row){return (-col*SZ)+'px '+(-row*SZ)+'px'}
+function icoHtml(col,row){return '<span class=ic style="background-position:'+pos(col,row)+'"></span>'}
+function V(n){return F.elements[n]}
+function setDirty(d){dirty=d;$('bar').classList.toggle('show',d)}
+
+/* ---------- status ---------- */
+function setStatus(j){
+  lastStatus=j;
+  const st=j.state||'?',ok=st==='CONNECTED',bad=/ERROR|BACKOFF/.test(st);
+  $('hdot').className='dot '+(ok?'ok':bad?'bad':'warn');$('hstate').textContent='TAK '+st;
+  const bw=j.lora_bw!=null?(+j.lora_bw%1?(+j.lora_bw).toFixed(1):(+j.lora_bw).toFixed(0)):'';
+  const M=[[j.batt_pct!=null?j.batt_pct+'%':'—','Battery '+(j.batt_mv?(j.batt_mv/1000).toFixed(2)+'V':'')],
+    [(j.lora_freq!=null?(+j.lora_freq).toFixed(3):'—'),(j.preset||'')+' BW'+bw+' SF'+(j.lora_sf||'')],
+    [j.wifi==='UP'?(j.rssi+' dBm'):(j.wifi||'—'),'Wi-Fi'],
+    [j.rx_packets!=null?j.rx_packets:'—','Mesh packets'],
+    [(j.adverts||0)+' / '+(j.adverts_gps||0),'Adverts / GPS'],
+    [j.nodes!=null?j.nodes:'—','On TAK map']];
+  $('met').innerHTML=M.map(m=>'<div><b>'+esc(m[0])+'</b><span>'+esc(m[1])+'</span></div>').join('');
+  $('kv').innerHTML='<b>TAK</b><span>'+esc((j.tak_host||'(not set)')+':'+(j.tak_port||'?'))+'</span>'+
+    '<b>Network</b><span>'+esc([j.ssid,j.ip].filter(Boolean).join(' · ')||'—')+'</span>'+
+    '<b>Last RX</b><span>'+(j.rx_packets?esc(j.rx_ago+' ago · RSSI '+j.rx_rssi+' · SNR '+j.rx_snr):'—')+'</span>'+
+    '<b>Last advert</b><span>'+(j.last_advert?esc(j.last_advert+(j.last_advert_gps?'':' (no GPS)')):'—')+'</span>'+
+    '<b>Last on map</b><span>'+(j.last_name&&j.last_name!=='-'?esc(j.last_name+' · '+j.last_ago+' ago'):'—')+'</span>';
+  $('serr').textContent=j.error||'';
+  $('up').textContent='up '+dur(j.uptime_s)+' · heap '+Math.round((j.heap||0)/1024)+' KB';
+  const cb=$('certBadge');cb.textContent=j.certs?'installed':'not installed';cb.style.color=j.certs?'var(--acc)':'var(--bad)';
+  $('chatStat').textContent=j.chat_m2t!=null?'mesh→TAK '+j.chat_m2t+' · TAK→mesh '+j.chat_t2m:'';
+  $('chatKv').innerHTML='<b>TAK uid</b><span>'+esc(j.gw_uid||'—')+'</span>';
+  $('advStat').textContent=j.advert_ago!=null?'advert sent '+dur(j.advert_ago)+' ago':'no advert sent yet';
+  const rc=j.chat_recent||[];
+  $('chatLog').innerHTML=rc.length?rc.map(m=>'<div class=cm><span class="cd '+(m.m?'mt':'tm')+'">'+(m.m?'mesh → TAK':'TAK → mesh')+
+    '</span><span class=ct>'+esc(m.t)+'</span><span class=ca>'+esc(dur(m.ago))+' ago</span></div>').join(''):
+    '<p class=hint style="margin:0">Nothing bridged yet. Messages appear here as they pass through.</p>';
+  if(!!j.logo!==hasLogo){hasLogo=!!j.logo;applyBrand()}
+  const s=(j.last_name&&j.last_name!=='-')?j.last_name:(j.last_advert||'');
+  if(s&&s!==sample){sample=s;preview()}
+}
+async function refreshStatus(){
+  if(document.hidden)return;
+  try{const r=await fetch('/api/status',{cache:'no-store'});setStatus(await r.json())}
+  catch(e){$('hdot').className='dot bad';$('hstate').textContent='offline'}
+}
+
+/* ---------- icon picker ---------- */
+function parseType(t){const m=/^a-([a-z])-(.+)$/.exec(t||'');return m?{a:m[1],fn:m[2]}:null}
+function buildGrid(){
+  const q=$('q').value.trim().toLowerCase(),col=IX.aff.indexOf(aff),cur=parseType(V('cot_type').value);
+  let h='',grp='';
+  IX.fn.forEach((f,row)=>{
+    if(q&&!(f[1]+' '+f[0]+' '+f[2]).toLowerCase().includes(q))return;
+    if(!q&&f[2]!==grp){grp=f[2];h+='<div class=gh>'+esc(grp)+'</div>'}
+    const on=cur&&cur.fn===f[0]&&mode==='sym';
+    h+='<button type=button class="t'+(on?' on':'')+'" data-fn="'+f[0]+'" title="a-'+aff+'-'+f[0]+'">'+icoHtml(col,row)+esc(f[1])+'</button>';
+  });
+  $('grid').innerHTML=h||'<p class=hint>No match</p>';
+}
+function buildMk(){
+  const t=V('cot_type').value;
+  $('mkgrid').innerHTML=MK.map(m=>'<button type=button class="t'+(t===m[0]?' on':'')+'" data-t="'+m[0]+'">'+
+    (m[2]==null?'<span class=spot style="background:'+esc(V('cot_color').value||'#fff')+'"></span>':icoHtml(m[2],IX.fn.length))+esc(m[1])+'</button>').join('');
+}
+/* ATAK / TAK Portal match usericons by exact "uid/Group/file.png" */
+function normIcon(p){
+  p=String(p||'').trim().replace(/[:\\]/g,'/');if(!p)return '';
+  const seg=p.slice(p.lastIndexOf('/')+1);return seg.includes('.')?p:p+'.png';
+}
+function setIdx(path){
+  const p=normIcon(path).toLowerCase(),u=IX.set.uid.toLowerCase()+'/';
+  if(!p.startsWith(u))return -1;
+  return IX.set.items.findIndex(it=>it[0].toLowerCase()===p.slice(u.length));
+}
+function ic2Html(i,tint){const c=IX.set.cols,p=pos(i%c,Math.floor(i/c));
+  return tint?'<span class=ic2 style="background:'+esc(tint)+';-webkit-mask:url(/iconset.png) '+p+' no-repeat;mask:url(/iconset.png) '+p+' no-repeat"></span>'
+    :'<span class=ic2 style="background-position:'+p+'"></span>'}
+function buildSet(){
+  const q=$('q2').value.trim().toLowerCase(),cur=setIdx(V('cot_icon').value);
+  let h='',grp='';
+  IX.set.items.forEach((it,i)=>{
+    const g=it[0].split('/')[0];
+    if(q&&!(it[1]+' '+it[0]).toLowerCase().includes(q))return;
+    if(!q&&g!==grp){grp=g;h+='<div class=gh>'+esc(g)+'</div>'}
+    h+='<button type=button class="t'+(i===cur?' on':'')+'" data-i='+i+' title="'+esc(it[0])+'">'+ic2Html(i)+esc(it[1])+'</button>';
+  });
+  $('setgrid').innerHTML=h||'<p class=hint>No match</p>';
+}
+function setMode(m,user){
+  mode=m;
+  for(const b of $('mode').children)b.classList.toggle('on',b.dataset.m===m);
+  $('pSym').classList.toggle('hide',m!=='sym');$('pMk').classList.toggle('hide',m!=='mk');$('pCus').classList.toggle('hide',m!=='cus');
+  if(user){
+    const t=V('cot_type').value;
+    if(m==='sym'&&!parseType(t))V('cot_type').value='a-'+aff+'-G-U-U-S-R';
+    if(m==='mk'&&!t.startsWith('b-'))V('cot_type').value='b-m-p-s-m';
+    if(m==='cus'&&!V('cot_icon').value)V('cot_icon').value=IX.set.uid+'/'+IX.set.items[0][0];
+    setDirty(true);
+  }
+  buildGrid();buildMk();buildSet();preview();
+}
+function setAff(a,user){
+  aff=a;for(const b of $('aff').children)b.classList.toggle('on',b.dataset.a===a);
+  const p=parseType(V('cot_type').value);
+  if(user&&p){V('cot_type').value='a-'+a+'-'+p.fn;setDirty(true)}
+  buildGrid();preview();
+}
+function detectMode(){
+  const t=V('cot_type').value,p=parseType(t);
+  if(p&&IX.aff.includes(p.a))aff=p.a;
+  for(const b of $('aff').children)b.classList.toggle('on',b.dataset.a===aff);
+  setMode(V('cot_icon').value?'cus':(t.startsWith('b-')?'mk':'sym'));
+}
+
+/* ---------- color ---------- */
+function setColor(c,user){
+  c=(c||'').toUpperCase();if(!/^#[0-9A-F]{6}$/.test(c))return;
+  V('cot_color').value=c;$('cp').value=c.toLowerCase();
+  for(const b of $('sws').children)b.classList.toggle('on',b.dataset.c===c);
+  if(user)setDirty(true);buildMk();preview();
+}
+
+/* ---------- preview ---------- */
+function callsign(){
+  const p=V('name_prefix').value;let n=sample||'tak_Example';
+  if(V('strip_prefix').checked&&p&&n.toLowerCase().startsWith(p.toLowerCase())&&n.length>p.length)n=n.slice(p.length);
+  return n;
+}
+function argb(){
+  const c=V('cot_color').value,m=/^#([0-9a-f]{6})$/i.exec(c);if(!m)return -1;
+  const a=Math.round((+V('cot_opacity').value||100)*2.55);return ((a<<24)|parseInt(m[1],16))|0;
+}
+function xe(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]))}
+function preview(){
+  const t=V('cot_type').value,c=V('cot_color').value||'#FFFFFF',p=parseType(t);
+  let ic='';
+  if(mode==='cus'){const si=setIdx(V('cot_icon').value);
+    ic=si>=0?ic2Html(si,c):'<span class=spot style="background:'+esc(c)+';border-radius:50% 50% 50% 0;transform:rotate(-45deg)"></span>'}
+  else if(t==='b-m-p-s-m')ic='<span class=spot style="background:'+esc(c)+'"></span>';
+  else{
+    const mi=IX.mk.findIndex(m=>m[0]===t);
+    if(mi>=0)ic=icoHtml(mi,IX.fn.length);
+    else if(p){const r=IX.fn.findIndex(f=>f[0]===p.fn),col=IX.aff.indexOf(p.a);if(r>=0&&col>=0)ic=icoHtml(col,r)}
+  }
+  $('pvIcon').innerHTML=ic||'<span class=hint>?</span>';
+  $('pvName').textContent=callsign();
+  let label=t;
+  if(p){const f=IX.fn.find(f=>f[0]===p.fn);if(f)label=({f:'Friendly',h:'Hostile',n:'Neutral',u:'Unknown'}[p.a]||'')+' '+f[1]+' · '+t}
+  const mk=MK.find(m=>m[0]===t);if(mk)label=mk[1]+' · '+t;
+  if(mode==='cus'){const si=setIdx(V('cot_icon').value);label=(si>=0?IX.set.items[si][1]+' · ':'')+(normIcon(V('cot_icon').value)||'(no path)')}
+  $('pvType').textContent=label;
+  $('pvMeta').textContent='Stale '+dur(V('stale_sec').value)+' · re-send '+dur(V('refresh_sec').value)+' · remove '+dur(V('max_age_sec').value)+(V('name_filter').checked?' · filter "'+V('name_prefix').value+'"':'');
+  $('opv').textContent=V('cot_opacity').value+'%';
+  for(const n of ['stale_sec','refresh_sec','max_age_sec'])$('d_'+n).textContent=dur(V(n).value);
+  $('colHint').textContent=mode==='sym'?'2525 symbols keep their affiliation color on most clients; color still applies in CloudTAK labels and lists.':'';
+  V('name_prefix').disabled=!V('name_filter').checked&&!V('strip_prefix').checked;
+  const now=new Date(),iso=d=>d.toISOString().replace(/\.\d+Z$/,'.000Z'),st=new Date(now.getTime()+(+V('stale_sec').value||0)*1000);
+  const ip=mode==='cus'?normIcon(V('cot_icon').value):'';
+  const icon=ip?"<usericon iconsetpath='"+xe(ip)+"'/>":t==='b-m-p-s-m'?"<usericon iconsetpath='COT_MAPPING_SPOTMAP/b-m-p-s-m/"+argb()+"'/>":'';
+  $('xml').textContent="<event version='2.0' uid='meshcore-…' type='"+xe(t)+"' how='"+xe(V('cot_how').value)+"' time='"+iso(now)+"' start='"+iso(now)+"' stale='"+iso(st)+"'>\n"+
+    "  <point lat='…' lon='…' hae='9999999.0' ce='9999999.0' le='9999999.0'/>\n  <detail>\n"+
+    "    <contact callsign='"+xe(callsign())+"'/>\n    <remarks>"+xe(V('cot_remarks').value)+"</remarks>\n"+
+    (icon?'    '+icon+'\n':'')+"    <color argb='"+argb()+"' value='"+argb()+"'/>\n"+(V('cot_archived').checked?'    <archive/>\n':'')+
+    "    <takv device='MeshCore GPS Tracker' platform='MeshCore TAK Gateway' version='1.0'/>\n  </detail>\n</event>";
+}
+
+/* ---------- radio ---------- */
+function syncPreset(fill){
+  const p=V('preset').value,v=PRESETS[p],custom=p==='CUSTOM';
+  ['lora_freq','lora_bw','lora_sf','lora_cr'].forEach((n,i)=>{V(n).disabled=!custom;if(v&&fill)V(n).value=v[i]});
+}
+
+/* ---------- chat channels ---------- */
+$('chans').innerHTML=[0,1,2].map(i=>'<div class=chn><div class=chh><label class=sw><input type=checkbox name=ch'+i+'_on><i></i>Channel '+(i+1)+'</label><span class=kb id=kb'+i+'></span></div>'+
+  '<div class=g><div><label class=l>MeshCore channel</label><input name=ch'+i+'_name maxlength=31 placeholder="MyChannel or #hashtag"></div>'+
+  '<div><label class=l>Secret key</label><input name=ch'+i+'_key type=password autocomplete=new-password spellcheck=false></div>'+
+  '<div><label class=l>TAK chat room</label><input name=ch'+i+'_room maxlength=31 placeholder="same as channel"></div></div></div>').join('');
+let hasKey=[0,0,0];
+function keyHex(k){
+  k=k.trim();if(!k||/^[0-9a-f]+$/i.test(k))return k.toLowerCase();
+  try{return [...atob(k)].map(c=>c.charCodeAt(0).toString(16).padStart(2,'0')).join('')}catch(e){return k}
+}
+function chanUi(){
+  const po=V('public_on').checked,kp=$('kbp');
+  kp.textContent=po?'mesh → TAK':'off';kp.style.color=po?'var(--acc)':'var(--muted)';
+  for(let i=0;i<3;i++){
+    const n=V('ch'+i+'_name').value.trim(),k=V('ch'+i+'_key').value.trim(),on=V('ch'+i+'_on').checked,b=$('kb'+i);
+    const tag=n.startsWith('#'),ok=tag||hasKey[i]||k;
+    V('ch'+i+'_key').placeholder=tag?'derived from #name':hasKey[i]?'saved · blank keeps it':'32 or 64 hex';
+    b.textContent=!n?'empty':!ok?'needs key':on?'bridging':'off';
+    b.style.color=!n?'var(--muted)':!ok?'var(--bad)':on?'var(--acc)':'var(--warn)';
+  }
+}
+
+/* ---------- gateway node ---------- */
+V('chat_lat').addEventListener('paste',e=>{
+  const m=(e.clipboardData.getData('text')||'').match(/^\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if(!m)return;
+  e.preventDefault();V('chat_lat').value=m[1];V('chat_lon').value=m[2];setDirty(true);
+});
+async function advertNow(){
+  if(dirty)await save();
+  const r=await fetch('/api/advert',{method:'POST'});toast(await r.text());
+}
+
+/* ---------- customization ---------- */
+let hasLogo=false,logoV=Date.now();
+function applyBrand(){
+  const t=V('ui_title').value.trim()||'MeshCore TAK Gateway',acc=V('accent').value||'#3dd68c',rs=document.documentElement.style;
+  $('htitle').textContent=t;document.title=t;rs.setProperty('--acc',acc);rs.setProperty('--acc2',acc);
+  $('hsub').classList.toggle('hide',t==='MeshCore TAK Gateway');
+  const bt=V('banner_text').value.trim();
+  $('banner').classList.toggle('hide',!V('banner_on').checked);$('btext').textContent=bt||t;$('btext').style.color=V('banner_color').value;
+  const src='/logo.png?v='+logoV;
+  for(const im of [$('hlogo'),$('logoPv'),...document.querySelectorAll('#banner .bl')]){
+    im.classList.toggle('hide',!hasLogo);if(hasLogo&&im.getAttribute('src')!==src)im.src=src;
+  }
+}
+$('logoFile').onchange=async e=>{
+  const f=e.target.files[0];e.target.value='';if(!f)return;
+  const img=new Image();img.src=URL.createObjectURL(f);
+  try{await img.decode()}catch(_){return toast('Could not read that image')}
+  const w=img.naturalWidth||128,h=img.naturalHeight||128,s=Math.min(1,128/Math.max(w,h)),c=document.createElement('canvas');
+  c.width=Math.max(1,Math.round(w*s));c.height=Math.max(1,Math.round(h*s));
+  c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  const blob=await new Promise(r=>c.toBlob(r,'image/png'));
+  const r=await fetch('/api/logo',{method:'POST',headers:{'Content-Type':'image/png'},body:blob});
+  if(!r.ok)return toast(await r.text());
+  hasLogo=true;logoV=Date.now();applyBrand();toast('Logo saved');
+};
+async function removeLogo(){
+  if(!confirm('Remove the logo?'))return;
+  await fetch('/api/logo/delete',{method:'POST'});hasLogo=false;applyBrand();toast('Logo removed');
+}
+
+/* ---------- load / save ---------- */
+async function loadForm(){
+  try{
+    const cfg=await(await fetch('/api/config',{cache:'no-store'})).json();
+    for(const k in cfg){const el=V(k);if(!el)continue;if(el.type==='checkbox')el.checked=cfg[k]==='1';else el.value=cfg[k]}
+    if(cfg.key_passphrase)$('key_pass').value=cfg.key_passphrase;
+    hasKey=[0,1,2].map(i=>cfg['ch'+i+'_haskey']==='1');
+    for(let i=0;i<3;i++)V('ch'+i+'_key').value='';
+    syncPreset(false);setColor(cfg.cot_color||'#0010EB');detectMode();chanUi();applyBrand();setDirty(false);
+  }catch(e){toast('Config load failed: '+e.message)}
+}
+async function save(){
+  const o={};
+  for(const el of F.elements){if(!el.name)continue;o[el.name]=el.type==='checkbox'?(el.checked?'1':'0'):el.value}
+  o.cot_icon=mode==='cus'?normIcon(o.cot_icon):'';
+  for(let i=0;i<3;i++){
+    const k=keyHex(o['ch'+i+'_key']||'');
+    if(k&&!/^([0-9a-f]{32}|[0-9a-f]{64})$/.test(k))return toast('Channel '+(i+1)+': the key must be 32 or 64 hex characters (or base64)');
+    o['ch'+i+'_key']=k;
+  }
+  const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});
+  toast(await r.text());if(r.ok){setDirty(false);loadForm();refreshStatus()}
+}
+F.addEventListener('input',e=>{
+  if(e.target.id==='q')return buildGrid();
+  if(e.target.id==='q2')return buildSet();
+  if(e.target.name==='cot_icon')buildSet();
+  if(/^ch\d_/.test(e.target.name))chanUi();
+  if(/^(ui_title|banner_|accent)/.test(e.target.name))applyBrand();
+  if(e.target.name==='preset')syncPreset(true);
+  if(e.target.name==='cot_color')setColor(e.target.value);
+  if(e.target.name==='cot_type'){detectMode()}
+  setDirty(true);preview();
+});
+F.addEventListener('change',e=>{if(e.target.type==='checkbox'||e.target.tagName==='SELECT'){setDirty(true);preview();chanUi();applyBrand()}});
+F.addEventListener('submit',e=>{e.preventDefault();save()});
+$('cp').addEventListener('input',e=>setColor(e.target.value,true));
+$('mode').onclick=e=>{const m=e.target.dataset.m;if(m)setMode(m,true)};
+$('aff').onclick=e=>{const a=e.target.dataset.a;if(a)setAff(a,true)};
+$('grid').onclick=e=>{const b=e.target.closest('[data-fn]');if(!b)return;V('cot_type').value='a-'+aff+'-'+b.dataset.fn;setDirty(true);buildGrid();preview()};
+$('setgrid').onclick=e=>{const b=e.target.closest('[data-i]');if(!b)return;V('cot_icon').value=IX.set.uid+'/'+IX.set.items[+b.dataset.i][0];setDirty(true);buildSet();preview()};
+V('cot_icon').addEventListener('blur',e=>{const n=normIcon(e.target.value);if(n!==e.target.value){e.target.value=n;buildSet();preview()}});
+$('mkgrid').onclick=e=>{const b=e.target.closest('[data-t]');if(!b)return;V('cot_type').value=b.dataset.t;setDirty(true);buildMk();preview()};
+$('sws').innerHTML=SWATCH.map(c=>'<button type=button data-c="'+c+'" title="'+c+'" style="background:'+c+'"></button>').join('');
+$('sws').onclick=e=>{const c=e.target.dataset.c;if(c)setColor(c,true)};
+document.querySelectorAll('.chips').forEach(ch=>ch.onclick=e=>{const v=e.target.dataset.v;if(!v)return;V(ch.dataset.f).value=v;setDirty(true);preview()});
+
+/* ---------- certs / actions ---------- */
+function readText(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(f)})}
+async function installCerts(){
+  toast('Uploading certificates…');
+  try{
+    let ca=$('ca').value,cert=$('cert').value,key=$('key').value;
+    for(const f of $('certFiles').files){
+      const n=f.name.toLowerCase(),t=await readText(f);
+      if(n.endsWith('.key'))key=t;else if(n.includes('trust')||(n.includes('ca')&&!n.includes('meshcore')))ca+=t;else cert=t;
+    }
+    if(!cert||!key)return toast('Select both the .pem and the .key file');
+    const r=await fetch('/api/certs',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ca,cert,key,key_passphrase:$('key_pass').value||'atakatak'})});
+    toast(await r.text());refreshStatus();
+  }catch(e){toast('Cert install error: '+e.message)}
+}
+async function testTak(){toast('Testing…');const r=await fetch('/api/test',{method:'POST'});toast(await r.text());refreshStatus()}
+async function doReboot(){if(!confirm('Reboot the gateway?'))return;await fetch('/api/reboot',{method:'POST'});toast('Rebooting…')}
+window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
+loadForm();refreshStatus();setInterval(refreshStatus,3000);
+</script></body></html>

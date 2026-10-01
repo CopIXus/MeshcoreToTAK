@@ -17,3 +17,12 @@ compile_commands.json
 .venv/
 venv/
 platformio.local.ini
+
+# TAK gateway: never publish client certificates / keys
+examples/tak_gateway/certs_converted/
+*.key
+*.p12
+# TAK gateway: CloudTAK icon download cache (build_web_assets.py re-fetches it)
+examples/tak_gateway/tools/cloudtak_icons/
+__pycache__/
+
