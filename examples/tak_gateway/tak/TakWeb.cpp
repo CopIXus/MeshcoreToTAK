@@ -196,7 +196,9 @@ void TakWeb::setupRoutes() {
         }
         setc(p.tak_host, sizeof(p.tak_host), "tak_host", false);
         setc(p.channel_label, sizeof(p.channel_label), "channel_label", true);
-        setc(p.name_prefix, sizeof(p.name_prefix), "name_prefix", true);
+        setc(p.filt_prefix, sizeof(p.filt_prefix), "filt_prefix", true);
+        setc(p.filt_suffix, sizeof(p.filt_suffix), "filt_suffix", true);
+        setc(p.filt_contains, sizeof(p.filt_contains), "filt_contains", true);
         setc(p.cot.type, sizeof(p.cot.type), "cot_type", false);
         setc(p.cot.how, sizeof(p.cot.how), "cot_how", false);
         setc(p.cot.remarks, sizeof(p.cot.remarks), "cot_remarks", true);
@@ -313,6 +315,7 @@ void TakWeb::setupRoutes() {
           pw_err += "\nWeb password changed - sign in again with the new password";
         }
 
+        if (g_client) g_client->removeFiltered();  // before markAllForResend clears the sent marks
         extern TakNodes tak_nodes;
         tak_nodes.markAllForResend();  // push the new styling on the next refresh tick
         String msg = link_changed ? "Saved - reconnecting to TAK" : "Saved - markers update within a few seconds";
@@ -526,7 +529,16 @@ String TakWeb::statusJson() const {
   j += "\"adverts_gps\":" + String(rx.adverts_gps) + ",";
   j += "\"last_advert\":\"" + jsonEsc(String(rx.last_advert_name)) + "\",";
   j += String("\"last_advert_gps\":") + (rx.last_advert_gps ? "true" : "false") + ",";
-  j += "\"nodes\":" + String(tak_nodes.count()) + ",";
+  j += "\"nodes\":" + String(_cfg ? tak_nodes.sentCount(_cfg->prefs) : tak_nodes.count()) + ",";
+  // GPS nodes heard (name, seconds ago) so the page can test filter rules live
+  j += "\"gps_nodes\":[";
+  for (int i = 0; i < tak_nodes.count(); i++) {
+    const TakNodeRecord* n = tak_nodes.at(i);
+    if (!n) continue;
+    if (i) j += ",";
+    j += "[\"" + jsonEsc(String(n->name)) + "\"," + String((millis() - n->last_heard_ms) / 1000UL) + "]";
+  }
+  j += "],";
   j += "\"last_name\":\"" + jsonEsc(last_name) + "\",";
   j += "\"last_ago\":\"" + last_ago + "\",";
   if (_client) {
@@ -565,7 +577,9 @@ String TakWeb::configJson() const {
     j += "\"lora_sf\":\"" + String(_cfg->prefs.lora_sf) + "\",";
     j += "\"lora_cr\":\"" + String(_cfg->prefs.lora_cr) + "\",";
     j += "\"name_filter\":\"" + String(_cfg->prefs.name_filter ? 1 : 0) + "\",";
-    j += "\"name_prefix\":\"" + jsonEsc(String(_cfg->prefs.name_prefix)) + "\",";
+    j += "\"filt_prefix\":\"" + jsonEsc(String(_cfg->prefs.filt_prefix)) + "\",";
+    j += "\"filt_suffix\":\"" + jsonEsc(String(_cfg->prefs.filt_suffix)) + "\",";
+    j += "\"filt_contains\":\"" + jsonEsc(String(_cfg->prefs.filt_contains)) + "\",";
     j += "\"stale_sec\":\"" + String(_cfg->prefs.stale_sec) + "\",";
     j += "\"refresh_sec\":\"" + String(_cfg->prefs.refresh_sec) + "\",";
     j += "\"max_age_sec\":\"" + String(_cfg->prefs.max_age_sec) + "\",";

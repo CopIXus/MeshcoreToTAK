@@ -126,12 +126,11 @@ void MyMesh::onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path
   _nodes->rx.last_advert_name[sizeof(_nodes->rx.last_advert_name) - 1] = 0;
   _nodes->rx.last_advert_gps = gps;
 
-  TakNodeRecord* rec =
-      _nodes->upsertFromContact(contact, self_id.pub_key, _cfg->prefs.name_filter, _cfg->prefs.name_prefix);
+  // GPS is checked first (upsert rejects adverts without a position), then the name rules.
+  TakNodeRecord* rec = _nodes->upsertFromContact(contact, self_id.pub_key);
   if (!rec) return;
 
-  // Push only if filter allows (upsert still stores for OLED when filtered out — check again)
-  if (!TakNodes::nameMatches(rec->name, _cfg->prefs.name_filter, _cfg->prefs.name_prefix)) {
+  if (!TakNodes::passesFilter(rec->name, _cfg->prefs)) {
     Serial.printf("[TAK] skip (name filter): %s\n", rec->name);
     return;
   }

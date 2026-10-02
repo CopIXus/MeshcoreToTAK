@@ -433,9 +433,7 @@ bool TakClient::dequeueXml(char* dest, size_t dest_len, size_t& out_len) {
 
 bool TakClient::queuePoint(const TakNodeRecord& node) {
   if (!_cfg) return false;
-  if (!TakNodes::nameMatches(node.name, _cfg->prefs.name_filter, _cfg->prefs.name_prefix)) {
-    return false;
-  }
+  if (!TakNodes::passesFilter(node.name, _cfg->prefs)) return false;
   time_t now = nowUtc();
   if (!now) {
     setError("NTP not ready");
@@ -481,14 +479,23 @@ void TakClient::processRefreshExpire() {
   _nodes->collectRefreshAndExpire(millis(), _cfg->prefs.refresh_sec, _cfg->prefs.max_age_sec,
                                   refresh, TAK_MAX_NODES, nr, expire, TAK_MAX_NODES, ne);
   for (int i = 0; i < nr; i++) {
-    if (!TakNodes::nameMatches(refresh[i]->name, _cfg->prefs.name_filter, _cfg->prefs.name_prefix)) continue;
+    if (!TakNodes::passesFilter(refresh[i]->name, _cfg->prefs)) continue;
     if (queuePoint(*refresh[i])) _nodes->markSent(refresh[i], millis());
   }
   for (int i = 0; i < ne; i++) {
-    if (TakNodes::nameMatches(expire[i]->name, _cfg->prefs.name_filter, _cfg->prefs.name_prefix)) {
-      queueDelete(expire[i]->uid);
-    }
+    if (expire[i]->last_sent_ms) queueDelete(expire[i]->uid);
     expire[i]->valid = false;
+  }
+}
+
+void TakClient::removeFiltered() {
+  if (!_nodes || !_cfg) return;
+  for (int i = 0; i < _nodes->count(); i++) {
+    TakNodeRecord* n = _nodes->at(i);
+    if (n && n->last_sent_ms && !TakNodes::passesFilter(n->name, _cfg->prefs) && queueDelete(n->uid)) {
+      n->last_sent_ms = 0;
+      Serial.printf("[TAK] removed (name filter): %s\n", n->name);
+    }
   }
 }
 

@@ -20,6 +20,7 @@ void TakConfig::setDefaults() {
   applyPreset("US");
   prefs.name_filter = false;
   copyStr(prefs.name_prefix, sizeof(prefs.name_prefix), "tak_");
+  copyStr(prefs.filt_prefix, sizeof(prefs.filt_prefix), "tak_");
   prefs.stale_sec = 180;
   prefs.refresh_sec = 60;
   prefs.max_age_sec = 1800;
@@ -91,14 +92,17 @@ bool TakConfig::load() {
   bool v2 = (n == TAK_PREFS_V2_SIZE && tmp.version == 2);
   bool v3 = (n == TAK_PREFS_V3_SIZE && tmp.version == 3);
   bool v4 = (n == TAK_PREFS_V4_SIZE && tmp.version == 4);
-  if (!current && !v2 && !v3 && !v4) {
+  bool v5 = (n == TAK_PREFS_V5_SIZE && tmp.version == 5);
+  if (!current && !v2 && !v3 && !v4 && !v5) {
     return false;
   }
   if (v2) tmp.strip_prefix = false;
   if (!current) {
     // default everything the old file lacks (its tail padding overlapped the first new bytes)
-    size_t from = v4 ? TAK_PREFS_V5_START : TAK_PREFS_V4_START;
+    size_t from = v5 ? TAK_PREFS_V6_START : v4 ? TAK_PREFS_V5_START : TAK_PREFS_V4_START;
     memcpy((uint8_t*)&tmp + from, (const uint8_t*)&prefs + from, sizeof(tmp) - from);
+    tmp.name_prefix[sizeof(tmp.name_prefix) - 1] = 0;
+    copyStr(tmp.filt_prefix, sizeof(tmp.filt_prefix), tmp.name_prefix);
     tmp.version = TAK_CONFIG_VERSION;
   }
   prefs = tmp;

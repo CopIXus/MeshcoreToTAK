@@ -33,10 +33,10 @@ public:
 
   void clear();
   // Returns pointer to updated/inserted record, or nullptr if rejected
-  TakNodeRecord* upsertFromContact(const ContactInfo& contact, const uint8_t* self_pub,
-                                   bool name_filter, const char* name_prefix);
+  TakNodeRecord* upsertFromContact(const ContactInfo& contact, const uint8_t* self_pub);
   TakNodeRecord* findByKey(const uint8_t* pub_key);
   int count() const;
+  int sentCount(const TakPrefs& p) const;  // nodes that pass the name filter
   TakNodeRecord* at(int idx);
   const TakNodeRecord* lastHeard() const { return _last_heard; }
   void markSent(TakNodeRecord* n, uint32_t now_ms);
@@ -46,7 +46,9 @@ public:
                                TakNodeRecord* out_expire[], int max_expire, int& n_expire);
 
   static bool hasValidGps(const ContactInfo& c);
-  static bool nameMatches(const char* name, bool filter_on, const char* prefix);
+  static bool passesFilter(const char* name, const TakPrefs& p);
+  // name minus the matched prefix / suffix rule when strip_prefix is on
+  static void callsignFor(const char* name, const TakPrefs& p, char* out, size_t out_len);
   static void makeUid(const uint8_t* pub_key, char* dest, size_t dest_len);
 
 private:

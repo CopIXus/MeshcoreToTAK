@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
 
-#define TAK_CONFIG_VERSION 5
+#define TAK_CONFIG_VERSION 6
 #define TAK_MAX_NODES 32
 #define TAK_HOST_LEN 128
 #define TAK_PATH_LEN 160
@@ -13,6 +13,7 @@
 #define TAK_PSK_LEN 64
 #define TAK_PASS_LEN 64
 #define TAK_PREFIX_LEN 16
+#define TAK_FILTER_LEN 96
 #define TAK_CHANNEL_LABEL_LEN 64
 #define TAK_PRESET_LEN 16
 #define TAK_MAX_CHAT 3
@@ -57,7 +58,7 @@ struct TakPrefs {
   int8_t tx_power_dbm;
 
   bool name_filter;
-  char name_prefix[TAK_PREFIX_LEN];
+  char name_prefix[TAK_PREFIX_LEN];  // legacy; migrated into filt_prefix
 
   uint16_t stale_sec;
   uint16_t refresh_sec;
@@ -69,7 +70,7 @@ struct TakPrefs {
   uint32_t ap_password_seed;
 
   // ---- v3 (fields below are absent from v2 files; load() defaults them) ----
-  bool strip_prefix;  // drop name_prefix from the TAK callsign
+  bool strip_prefix;  // drop the matched prefix / suffix rule from the TAK callsign
 
   // ---- v4 ----
   char ui_title[40];
@@ -89,14 +90,21 @@ struct TakPrefs {
   char node_name[32];     // MeshCore advert name; location comes from chat_lat / chat_lon
   bool advert_on;
   uint16_t advert_hours;  // flood advert interval
+
+  // ---- v6: name filter rules (comma-separated, case-insensitive; any match passes) ----
+  char filt_prefix[TAK_FILTER_LEN];    // replaces name_prefix
+  char filt_suffix[TAK_FILTER_LEN];
+  char filt_contains[TAK_FILTER_LEN];
 };
 
 #define TAK_PREFS_V2_SIZE offsetof(TakPrefs, strip_prefix)
 #define TAK_PREFS_V4_START offsetof(TakPrefs, ui_title)
 #define TAK_PREFS_V5_START offsetof(TakPrefs, node_name)
-// v3 / v4 files end with the struct's tail padding
+#define TAK_PREFS_V6_START offsetof(TakPrefs, filt_prefix)
+// v3 / v4 / v5 files end with the struct's tail padding
 #define TAK_PREFS_V3_SIZE ((offsetof(TakPrefs, strip_prefix) + 1 + 3) & ~(size_t)3)
 #define TAK_PREFS_V4_SIZE ((TAK_PREFS_V5_START + 3) & ~(size_t)3)
+#define TAK_PREFS_V5_SIZE ((TAK_PREFS_V6_START + 3) & ~(size_t)3)
 
 class TakConfig {
 public:

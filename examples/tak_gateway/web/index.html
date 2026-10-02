@@ -96,6 +96,9 @@ input[type=color]{height:38px;padding:2px;cursor:pointer}
 .chn{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--card2)}
 .chh{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:.88rem}
 .kb{margin-left:auto;font-size:.72rem;font-weight:700}
+.gn{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.gn span{font-size:.78rem;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--card2)}
+.gn .ok{border-color:var(--acc);color:var(--acc)}.gn .no{color:var(--muted);text-decoration:line-through}
 .cm{display:flex;gap:10px;align-items:baseline;padding:7px 10px;background:var(--card2);border:1px solid var(--line);
 border-radius:8px;margin-bottom:6px;font-size:.85rem}
 .cd{flex:none;font-size:.66rem;font-weight:700;padding:2px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.04em}
@@ -116,12 +119,17 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <div class=pv><div class=pvi id=pvIcon></div>
 <div style="min-width:0"><div class=pvn id=pvName></div><div class=pvt id=pvType></div><div class=hint id=pvMeta></div></div></div>
 
-<h3>Nodes &amp; callsign</h3>
+<h3>Which nodes go to TAK</h3>
+<p class=hint style="margin:0 0 8px">Only nodes whose adverts carry a GPS position are considered. These rules then choose which of them are sent.</p>
 <div class=g>
-<label class="sw full"><input type=checkbox name=name_filter><i></i>Only send nodes whose name starts with the prefix</label>
-<div><label class=l>Name prefix</label><input name=name_prefix maxlength=15 placeholder=tak_></div>
-<label class=sw style="align-self:end;padding-bottom:8px"><input type=checkbox name=strip_prefix><i></i>Remove prefix from callsign</label>
+<label class="sw full"><input type=checkbox name=name_filter><i></i>Only send nodes whose name matches a rule</label>
+<div><label class=l>Starts with</label><input name=filt_prefix maxlength=95 placeholder="tak_, TN-"></div>
+<div><label class=l>Ends with</label><input name=filt_suffix maxlength=95 placeholder="-gps, _T"></div>
+<div><label class=l>Contains</label><input name=filt_contains maxlength=95 placeholder="truck, rover"></div>
+<label class="sw full"><input type=checkbox name=strip_prefix><i></i>Remove the matched start / end text from the callsign</label>
 </div>
+<p class=hint>Separate several entries with commas. Case does not matter, and a node is sent if it matches any rule.</p>
+<div id=gpsList></div>
 
 <h3>Icon</h3>
 <div class=seg id=mode><button type=button data-m=sym>2525 symbol</button><button type=button data-m=mk>Marker</button><button type=button data-m=cus>Iconset</button></div>
@@ -312,6 +320,7 @@ function setStatus(j){
     '</span><span class=ct>'+esc(m.t)+'</span><span class=ca>'+esc(dur(m.ago))+' ago</span></div>').join(''):
     '<p class=hint style="margin:0">Nothing bridged yet. Messages appear here as they pass through.</p>';
   if(!!j.logo!==hasLogo){hasLogo=!!j.logo;applyBrand()}
+  gpsUi();
   const s=(j.last_name&&j.last_name!=='-')?j.last_name:(j.last_advert||'');
   if(s&&s!==sample){sample=s;preview()}
 }
@@ -398,10 +407,28 @@ function setColor(c,user){
 }
 
 /* ---------- preview ---------- */
-function callsign(){
-  const p=V('name_prefix').value;let n=sample||'tak_Example';
-  if(V('strip_prefix').checked&&p&&n.toLowerCase().startsWith(p.toLowerCase())&&n.length>p.length)n=n.slice(p.length);
-  return n;
+/* name rules: same matching as TakNodes::passesFilter / callsignFor on the device */
+function rules(n){return V(n).value.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean)}
+function longest(list,f){let b=0;for(const t of list)if(t.length>b&&f(t))b=t.length;return b}
+function matchLen(name){
+  const l=name.toLowerCase();
+  return {p:longest(rules('filt_prefix'),t=>l.startsWith(t)),s:longest(rules('filt_suffix'),t=>l.endsWith(t)),
+    c:longest(rules('filt_contains'),t=>l.includes(t))};
+}
+function passes(name){if(!V('name_filter').checked)return true;const m=matchLen(name);return !!(m.p||m.s||m.c)}
+function callsignOf(n){
+  if(!V('strip_prefix').checked)return n;
+  const m=matchLen(n),a=m.p<n.length?m.p:0,b=m.s&&n.length-m.s>a?n.length-m.s:n.length;
+  return n.slice(a,b).trim()||n;
+}
+function callsign(){return callsignOf(sample||'tak_Example')}
+function gpsUi(){
+  const g=lastStatus.gps_nodes||[];
+  if(!g.length){$('gpsList').innerHTML='<p class=hint>No GPS nodes heard since the gateway started. They appear here as adverts arrive.</p>';return}
+  const sent=g.filter(x=>passes(x[0])).length;
+  $('gpsList').innerHTML='<div class=gn>'+g.map(([n,ago])=>{const ok=passes(n),c=callsignOf(n);
+    return '<span class='+(ok?'ok':'no')+' title="heard '+esc(dur(ago))+' ago">'+esc(n)+(ok&&c!==n?' → '+esc(c):'')+'</span>'}).join('')+
+    '</div><p class=hint>GPS nodes heard: '+g.length+' · sent with these rules: '+sent+(dirty?' (unsaved)':'')+'</p>';
 }
 function argb(){
   const c=V('cot_color').value,m=/^#([0-9a-f]{6})$/i.exec(c);if(!m)return -1;
@@ -426,11 +453,11 @@ function preview(){
   const mk=MK.find(m=>m[0]===t);if(mk)label=mk[1]+' · '+t;
   if(mode==='cus'){const si=setIdx(V('cot_icon').value);label=(si>=0?IX.set.items[si][1]+' · ':'')+(normIcon(V('cot_icon').value)||'(no path)')}
   $('pvType').textContent=label;
-  $('pvMeta').textContent='Stale '+dur(V('stale_sec').value)+' · re-send '+dur(V('refresh_sec').value)+' · remove '+dur(V('max_age_sec').value)+(V('name_filter').checked?' · filter "'+V('name_prefix').value+'"':'');
+  $('pvMeta').textContent='Stale '+dur(V('stale_sec').value)+' · re-send '+dur(V('refresh_sec').value)+' · remove '+dur(V('max_age_sec').value)+(V('name_filter').checked?' · name rules on':'');
   $('opv').textContent=V('cot_opacity').value+'%';
   for(const n of ['stale_sec','refresh_sec','max_age_sec'])$('d_'+n).textContent=dur(V(n).value);
   $('colHint').textContent=mode==='sym'?'2525 symbols keep their affiliation color on most clients; color still applies in CloudTAK labels and lists.':'';
-  V('name_prefix').disabled=!V('name_filter').checked&&!V('strip_prefix').checked;
+  gpsUi();
   const now=new Date(),iso=d=>d.toISOString().replace(/\.\d+Z$/,'.000Z'),st=new Date(now.getTime()+(+V('stale_sec').value||0)*1000);
   const ip=mode==='cus'?normIcon(V('cot_icon').value):'';
   const icon=ip?"<usericon iconsetpath='"+xe(ip)+"'/>":t==='b-m-p-s-m'?"<usericon iconsetpath='COT_MAPPING_SPOTMAP/b-m-p-s-m/"+argb()+"'/>":'';

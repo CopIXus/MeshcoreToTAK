@@ -16,17 +16,75 @@ bool TakNodes::hasValidGps(const ContactInfo& c) {
   return true;
 }
 
-bool TakNodes::nameMatches(const char* name, bool filter_on, const char* prefix) {
-  if (!filter_on) return true;
-  if (!name || !prefix || !prefix[0]) return false;
-  size_t n = strlen(prefix);
+static bool ieq(const char* a, const char* b, size_t n) {
   for (size_t i = 0; i < n; i++) {
-    char a = name[i];
-    char b = prefix[i];
-    if (!a) return false;
-    if (tolower((unsigned char)a) != tolower((unsigned char)b)) return false;
+    if (tolower((unsigned char)a[i]) != tolower((unsigned char)b[i])) return false;
   }
   return true;
+}
+
+enum MatchMode { MatchPrefix, MatchSuffix, MatchContains };
+
+// Length of the longest token in a comma-separated list that matches name; 0 if none.
+static size_t matchList(const char* list, const char* name, MatchMode mode) {
+  size_t nlen = strlen(name), best = 0;
+  const char* s = list;
+  while (s && *s) {
+    const char* e = strchr(s, ',');
+    if (!e) e = s + strlen(s);
+    const char* a = s;
+    const char* b = e;
+    while (a < b && isspace((unsigned char)*a)) a++;
+    while (b > a && isspace((unsigned char)b[-1])) b--;
+    size_t t = b - a;
+    if (t && t <= nlen && t > best) {
+      bool hit = false;
+      if (mode == MatchPrefix) {
+        hit = ieq(name, a, t);
+      } else if (mode == MatchSuffix) {
+        hit = ieq(name + nlen - t, a, t);
+      } else {
+        for (size_t i = 0; i + t <= nlen && !hit; i++) hit = ieq(name + i, a, t);
+      }
+      if (hit) best = t;
+    }
+    s = *e ? e + 1 : e;
+  }
+  return best;
+}
+
+bool TakNodes::passesFilter(const char* name, const TakPrefs& p) {
+  if (!p.name_filter) return true;
+  if (!name || !name[0]) return false;
+  return matchList(p.filt_prefix, name, MatchPrefix) || matchList(p.filt_suffix, name, MatchSuffix) ||
+         matchList(p.filt_contains, name, MatchContains);
+}
+
+void TakNodes::callsignFor(const char* name, const TakPrefs& p, char* out, size_t out_len) {
+  if (!out || !out_len) return;
+  out[0] = 0;
+  if (!name) return;
+  size_t nlen = strlen(name), from = 0, to = nlen;
+  if (p.strip_prefix) {
+    size_t pl = matchList(p.filt_prefix, name, MatchPrefix);
+    size_t sl = matchList(p.filt_suffix, name, MatchSuffix);
+    if (pl < nlen) from = pl;
+    if (sl && nlen - sl > from) to = nlen - sl;
+    while (from < to && isspace((unsigned char)name[from])) from++;
+    while (to > from && isspace((unsigned char)name[to - 1])) to--;
+    if (from >= to) from = 0, to = nlen;  // never strip a name down to nothing
+  }
+  size_t n = to - from < out_len - 1 ? to - from : out_len - 1;
+  memcpy(out, name + from, n);
+  out[n] = 0;
+}
+
+int TakNodes::sentCount(const TakPrefs& p) const {
+  int n = 0;
+  for (int i = 0; i < TAK_MAX_NODES; i++) {
+    if (_nodes[i].valid && passesFilter(_nodes[i].name, p)) n++;
+  }
+  return n;
 }
 
 void TakNodes::makeUid(const uint8_t* pub_key, char* dest, size_t dest_len) {
@@ -64,8 +122,7 @@ int TakNodes::oldestSlot() {
   return best;
 }
 
-TakNodeRecord* TakNodes::upsertFromContact(const ContactInfo& contact, const uint8_t* self_pub,
-                                           bool name_filter, const char* name_prefix) {
+TakNodeRecord* TakNodes::upsertFromContact(const ContactInfo& contact, const uint8_t* self_pub) {
   if (self_pub && memcmp(contact.id.pub_key, self_pub, 32) == 0) {
     return nullptr;  // never track self
   }
@@ -89,12 +146,7 @@ TakNodeRecord* TakNodes::upsertFromContact(const ContactInfo& contact, const uin
   _nodes[slot].last_heard_ms = millis();
   _nodes[slot].pending_delete = false;
   _last_heard = &_nodes[slot];
-
-  if (!nameMatches(contact.name, name_filter, name_prefix)) {
-    // Still record for OLED, but caller should not push
-    return &_nodes[slot];
-  }
-  return &_nodes[slot];
+  return &_nodes[slot];  // recorded even if the name filter rejects it; callers check passesFilter()
 }
 
 TakNodeRecord* TakNodes::findByKey(const uint8_t* pub_key) {

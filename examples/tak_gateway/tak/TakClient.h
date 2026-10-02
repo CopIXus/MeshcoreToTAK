@@ -48,6 +48,7 @@ public:
   bool testConnection(String& error_out);
   bool queuePoint(const TakNodeRecord& node);
   bool queueDelete(const char* uid);
+  void removeFiltered();  // delete map markers for nodes the name filter now rejects
 
   // MeshCore channel message -> GeoChat in that channel's TAK room
   bool queueChat(int ch, const char* sender, const char* text);

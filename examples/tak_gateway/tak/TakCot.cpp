@@ -74,12 +74,8 @@ size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node
   formatTime(now_utc, t0, sizeof(t0));
   formatTime(now_utc + (time_t)prefs.stale_sec, t1, sizeof(t1));
 
-  const char* callsign = node.name;
-  size_t plen = strlen(prefs.name_prefix);
-  if (prefs.strip_prefix && plen && strlen(node.name) > plen &&
-      TakNodes::nameMatches(node.name, true, prefs.name_prefix)) {
-    callsign = node.name + plen;
-  }
+  char callsign[sizeof(node.name)];
+  TakNodes::callsignFor(node.name, prefs, callsign, sizeof(callsign));
   xmlEscape(callsign, call_esc, sizeof(call_esc));
   xmlEscape(style.remarks, rem_esc, sizeof(rem_esc));
 
