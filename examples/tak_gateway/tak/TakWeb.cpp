@@ -335,6 +335,12 @@ void TakWeb::setupRoutes() {
     req->send(r);
   });
 
+  // Must be registered before "/api/logo", which also matches paths below it.
+  g_server->on("/api/logo/delete", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (g_cfg) SPIFFS.remove(g_cfg->logoPath());
+    req->send(200, "text/plain", "Logo removed");
+  });
+
   // Raw PNG body (the page resizes the image first), streamed straight to flash.
   g_server->on(
       "/api/logo", HTTP_POST,
@@ -342,35 +348,45 @@ void TakWeb::setupRoutes() {
       nullptr,
       [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
         static File f;
+        static size_t written = 0;
+        static const char* tmp = "/tak/logo.tmp";
         if (!g_cfg || !authed(req)) return;
         if (total > 48 * 1024) {
           if (index == 0) req->send(413, "text/plain", "Logo too large (max 48 KB after resize)");
           return;
         }
         if (index == 0) {
-          SPIFFS.mkdir("/tak");
-          f = SPIFFS.open("/tak/logo.tmp", "w");
+          if (f) f.close();
+          SPIFFS.remove(tmp);
+          f = SPIFFS.open(tmp, "w");
+          written = 0;
         }
-        if (f) f.write(data, len);
+        if (f) written += f.write(data, len);
         if (index + len < total) return;
-        bool ok = f && f.size() == total;
-        if (f) f.close();
-        if (ok) {
-          SPIFFS.remove(g_cfg->logoPath());
-          ok = SPIFFS.rename("/tak/logo.tmp", g_cfg->logoPath());
+        String err;
+        if (!f) {
+          err = "Logo save failed: could not create the file";
+        } else {
+          f.close();
+          if (written != total) {
+            err = "Logo save failed: storage full (" + String(written) + " of " + String(total) + " bytes written)";
+          } else {
+            SPIFFS.remove(g_cfg->logoPath());
+            if (!SPIFFS.rename(tmp, g_cfg->logoPath())) err = "Logo save failed: could not replace the old logo";
+          }
         }
-        req->send(ok ? 200 : 500, "text/plain", ok ? "Logo saved" : "Logo write failed");
+        if (err.length()) {
+          SPIFFS.remove(tmp);
+          err += " - " + String((SPIFFS.totalBytes() - SPIFFS.usedBytes()) / 1024) + " KB free";
+          Serial.printf("[WEB] %s\n", err.c_str());
+        }
+        req->send(err.length() ? 500 : 200, "text/plain", err.length() ? err : String("Logo saved"));
       });
 
   g_server->on("/api/advert", HTTP_POST, [](AsyncWebServerRequest* req) {
     requestMeshAdvert();
     bool clock_ok = g_client && g_client->nowUtc();
     req->send(200, "text/plain", clock_ok ? "Advert sent" : "Advert queued - waiting for the clock (NTP)");
-  });
-
-  g_server->on("/api/logo/delete", HTTP_POST, [](AsyncWebServerRequest* req) {
-    if (g_cfg) SPIFFS.remove(g_cfg->logoPath());
-    req->send(200, "text/plain", "Logo removed");
   });
 
   g_server->on(
@@ -634,6 +650,8 @@ String TakWeb::statusJson() const {
   }
   unsigned long adv = lastMeshAdvertMs();
   j += "\"advert_ago\":" + ago(adv) + ",";
+  j += "\"fs_used\":" + String(SPIFFS.usedBytes()) + ",";
+  j += "\"fs_total\":" + String(SPIFFS.totalBytes()) + ",";
   j += "\"fw\":\"" + String(TakUpdate::current()) + "\",";
   j += "\"upd_state\":\"" + String(tak_update.stateName()) + "\",";
   j += "\"upd_latest\":\"" + String(tak_update.latest()) + "\",";

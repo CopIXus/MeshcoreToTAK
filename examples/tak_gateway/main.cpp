@@ -47,13 +47,17 @@ static void handleSerial() {
                       tak_config.prefs.tak_host, WiFi.status() == WL_CONNECTED,
                       WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "-",
                       tak_client.lastError());
+      } else if (line.startsWith("fs")) {
+        Serial.printf("SPIFFS used %u of %u bytes\n", (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes());
+        File root = SPIFFS.open("/");
+        for (File f = root.openNextFile(); f; f = root.openNextFile()) Serial.printf("  %6u %s\n", (unsigned)f.size(), f.path());
       } else if (line.startsWith("factory_reset")) {
         tak_config.factoryResetNetworkAndTak();
         Serial.println("OK factory reset (reboot recommended)");
       } else if (line.startsWith("config ")) {
         Serial.println("OK (use web UI for full config; serial JSON subset TBD)");
       } else if (line.length()) {
-        Serial.println("cmds: status | factory_reset");
+        Serial.println("cmds: status | fs | factory_reset");
       }
       line = "";
     } else {

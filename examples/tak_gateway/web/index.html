@@ -631,7 +631,9 @@ $('logoFile').onchange=async e=>{
 };
 async function removeLogo(){
   if(!confirm('Remove the logo?'))return;
-  await fetch('/api/logo/delete',{method:'POST'});hasLogo=false;applyBrand();toast('Logo removed');
+  const r=await fetch('/api/logo/delete',{method:'POST'});
+  if(!r.ok)return toast('Could not remove the logo: '+await r.text());
+  hasLogo=false;applyBrand();toast('Logo removed');
 }
 
 /* ---------- collapsible cards ---------- */
