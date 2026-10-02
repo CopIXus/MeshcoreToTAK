@@ -267,7 +267,8 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <div class=full><label class=l>Title</label><input name=ui_title maxlength=39 placeholder="MeshCore TAK Gateway">
 <p class=hint>Shown at the top of this page and on the device's OLED screen.</p></div>
 <label class="sw full"><input type=checkbox name=banner_on><i></i>Show identification banner</label>
-<div class=full><label class=l>Banner text</label><input name=banner_text maxlength=63 placeholder="County OEM · MeshCore gateway"></div>
+<div class=full><label class=l>Banner text</label><input name=banner_text maxlength=63 placeholder="County OEM · MeshCore gateway">
+<p class=hint>A second line under the title, e.g. the agency or site. Not shown when blank or the same as the title.</p></div>
 <div><label class=l>Banner color</label><input type=color name=banner_color></div>
 <div><label class=l>Accent color</label><input type=color name=accent></div>
 </div>
@@ -604,7 +605,7 @@ function applyBrand(){
   $('htitle').textContent=t;document.title=t;rs.setProperty('--acc',acc);rs.setProperty('--acc2',acc);
   $('hsub').classList.toggle('hide',t==='MeshCore TAK Gateway');
   const bt=V('banner_text').value.trim();
-  $('banner').classList.toggle('hide',!V('banner_on').checked);$('btext').textContent=bt||t;$('btext').style.color=V('banner_color').value;
+  $('banner').classList.toggle('hide',!V('banner_on').checked||!bt||bt===t);$('btext').textContent=bt;$('btext').style.color=V('banner_color').value;
   const src='/logo.png?v='+logoV;
   for(const im of [$('hlogo'),$('logoPv'),...document.querySelectorAll('#banner .bl')]){
     im.classList.toggle('hide',!hasLogo);if(hasLogo&&im.getAttribute('src')!==src)im.src=src;
@@ -655,7 +656,8 @@ function sums(){
   S('chat',ch.length?ch.join(' · '):'no channels bridged');
   S('conn',(V('enabled').checked?(v('tak_host')||'no host')+':'+v('tak_port'):'TAK sending off')+' · Wi-Fi '+(v('wifi_ssid')||'not set'));
   S('radio',V('preset').selectedOptions[0].text+' · '+v('lora_freq')+' MHz · BW'+v('lora_bw')+' SF'+v('lora_sf')+' CR'+v('lora_cr'));
-  S('brand',(v('ui_title')||'MeshCore TAK Gateway')+(V('banner_on').checked?' · banner on':'')+(hasLogo?' · logo':''));
+  const bt=v('banner_text');
+  S('brand',(v('ui_title')||'MeshCore TAK Gateway')+(V('banner_on').checked&&bt?' · banner "'+bt+'"':'')+(hasLogo?' · logo':''));
   S('certs','client certificate for the TAK connection');
 }
 function markCard(el){const c=el&&el.closest&&el.closest('.card.cl');if(c)c.classList.add('ch')}
