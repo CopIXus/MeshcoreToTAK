@@ -87,10 +87,12 @@ public:
   void requestAdvert() { _advert_due = true; }
   bool advertPending() const { return _advert_due; }
   unsigned long lastAdvertMs() const { return _last_advert_ms; }
+  uint32_t advertsSent() const { return _adverts_sent; }
   void loopGateway();
 
 private:
   bool _advert_due = false;
   unsigned long _last_advert_ms = 0;
+  uint32_t _adverts_sent = 0;
   bool sendSelfAdvert();
 };

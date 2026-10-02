@@ -40,10 +40,34 @@ button.s{background:#223046;color:var(--text)}button.s:hover{background:#2b3b55}
 .sw input:checked+i{background:var(--acc)}
 .sw input:checked+i:after{left:19px;background:#fff}
 .m{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-@media(max-width:480px){.m{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.m{grid-template-columns:repeat(2,1fr)}}
 input[type=range]{accent-color:var(--acc);padding:0;border:0;background:none}
-.m div{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-.m b{display:block;font-size:.98rem}.m span{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.m>div{background:var(--card2);border:1px solid var(--line);border-left:3px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.m>div.ok{border-left-color:var(--acc)}.m>div.bad{border-left-color:var(--bad)}.m>div.warn{border-left-color:var(--warn)}
+.m span{display:block;font-size:.66rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.m b{display:block;font-size:1.15rem;margin:1px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m em{display:block;font-style:normal;font-size:.74rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m em.w{color:var(--warn)}
+.cl>h2{cursor:pointer;margin:0;user-select:none}
+.cl>h2:after{content:"";flex:none;width:7px;height:7px;border:solid var(--muted);border-width:0 2px 2px 0;transform:rotate(45deg);margin:0 3px 4px 4px;transition:transform .15s}
+.cl.open>h2:after{transform:rotate(-135deg);margin-bottom:-2px}
+.cl>h2:focus-visible{outline:1px solid var(--acc);outline-offset:4px;border-radius:4px}
+.cl>.body{display:none;margin-top:12px}.cl.open>.body{display:block}
+.cl{padding:12px 16px}.cl:not(.open):hover{border-color:#33425a}
+.ti{flex:none}.cl.ch .ti:after{content:" •";color:var(--warn)}
+.sum{flex:1;min-width:0;color:var(--muted);font-weight:600;font-size:.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card>h2 .sum+small{margin-left:0}
+@media(max-width:560px){.cl>h2{flex-wrap:wrap;row-gap:2px}.sum{order:5;flex-basis:100%}}
+.sh{display:flex;align-items:center;gap:6px;margin:18px 2px 8px}
+.sh span{flex:1;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:700}
+.sh button{padding:4px 10px;font-size:.74rem;background:none;color:var(--muted);border:1px solid var(--line)}
+.sh button:hover{color:var(--text);background:var(--card2)}
+.upd{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 12px;border:1px solid var(--acc);
+background:#17291f;border-radius:8px;margin-bottom:10px;font-size:.88rem}
+.upd.bad{border-color:var(--bad);background:#2a1519}.upd>div{flex:1;min-width:200px}
+.upd a{color:var(--acc);font-size:.8rem}
+.pb{height:6px;background:var(--field);border-radius:3px;overflow:hidden;margin-top:6px}.pb i{display:block;height:100%;background:var(--acc);transition:width .3s}
+.ver{font:600 .72rem ui-monospace,Consolas,monospace;color:var(--muted)}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:.84rem;margin-top:10px}
 .kv b{color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;padding-top:2px}
 .err{color:var(--bad)}
@@ -110,12 +134,20 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <header><img id=hlogo class=hide alt=""><div class=ht><h1 id=htitle>MeshCore TAK Gateway</h1><small id=hsub class=hide>MeshCore TAK Gateway</small></div><span class=pill><span id=hdot class=dot></span><span id=hstate>…</span></span></header>
 <div id=banner class=hide><img class=bl alt=""><span id=btext></span><img class=bl alt=""></div>
 
-<section class=card><h2>Device status <small id=up></small></h2>
-<div class=m id=met></div><div class=kv id=kv></div><div id=serr class=err></div></section>
+<section class=card><h2>Dashboard <span class=ver id=ver></span><small id=up></small></h2>
+<div id=upd class="upd hide"></div>
+<div class=m id=met></div><div id=serr class=err style="margin-top:8px;font-size:.84rem"></div>
+<h3>Recent messages</h3>
+<div id=chatLog></div>
+<div class=row><button type=button onclick=testTak()>Test TAK connection</button>
+<button type=button class=s onclick=doReboot()>Reboot</button></div>
+<p class=hint>Counts are since the gateway last started and only include events actually delivered to the TAK server.</p></section>
+
+<div class=sh><span>Settings</span><button type=button onclick=allCards(1)>Expand all</button><button type=button onclick=allCards(0)>Collapse all</button></div>
 
 <form id=f autocomplete=off>
 
-<section class=card><h2>Map marker (CoT)</h2>
+<section class="card cl" id=c_map><h2><span class=ti>Map marker (CoT)</span><span class=sum id=s_map></span></h2>
 <div class=pv><div class=pvi id=pvIcon></div>
 <div style="min-width:0"><div class=pvn id=pvName></div><div class=pvt id=pvType></div><div class=hint id=pvMeta></div></div></div>
 
@@ -177,7 +209,7 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 </details>
 </section>
 
-<section class=card><h2>Gateway node <small id=advStat></small></h2>
+<section class="card cl" id=c_node><h2><span class=ti>Gateway node</span><span class=sum id=s_node></span><small id=advStat></small></h2>
 <div class=g>
 <div><label class=l>Node name</label><input name=node_name maxlength=31 placeholder=TAK-GW></div>
 <div><label class=l>Latitude</label><input name=chat_lat inputmode=decimal placeholder="e.g. 36.1627"></div>
@@ -193,7 +225,7 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <p class=hint>Floods a MeshCore advert with this name and location so the gateway shows up in contact lists and on mesh maps. Sent at boot once the clock is set, then on this interval.</p>
 </section>
 
-<section class=card><h2>MeshCore chat &harr; TAK <small id=chatStat></small></h2>
+<section class="card cl" id=c_chat><h2><span class=ti>MeshCore chat &harr; TAK</span><span class=sum id=s_chat></span></h2>
 <p class=hint style="margin:0 0 10px">Messages heard on these MeshCore channels are posted to a TAK chat room, and messages sent to that room in TAK go back out on the channel.</p>
 <div class=chn><div class=chh><label class=sw><input type=checkbox name=public_on><i></i>Public channel &rarr; TAK</label><span class=kb id=kbp></span></div>
 <div class=g><div><label class=l>TAK chat room</label><input name=public_room maxlength=31 placeholder=MeshCore></div></div>
@@ -205,12 +237,10 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <div><label class=l>Callsign</label><input name=chat_callsign maxlength=39></div>
 </div>
 <p class=hint>TAK users can message this contact directly (goes to the first channel). It is placed at the gateway location set under Gateway node.</p>
-<h3>Recent messages</h3>
-<div id=chatLog></div>
 <div class=kv id=chatKv></div>
 </section>
 
-<section class=card><h2>Connection</h2>
+<section class="card cl" id=c_conn><h2><span class=ti>Connection</span><span class=sum id=s_conn></span></h2>
 <label class=sw><input type=checkbox name=enabled><i></i>Send to TAK Server</label>
 <h3>Wi-Fi</h3>
 <div class=g><div><label class=l>SSID</label><input name=wifi_ssid></div><div><label class=l>Password</label><input name=wifi_psk type=password></div></div>
@@ -223,7 +253,7 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <p class=hint>Use the host and port from your Portal Integration row.</p>
 </section>
 
-<section class=card><h2>MeshCore radio</h2>
+<section class="card cl" id=c_radio><h2><span class=ti>MeshCore radio</span><span class=sum id=s_radio></span></h2>
 <div class="g n">
 <div><label class=l>Preset</label><select name=preset><option>US</option><option>EU</option><option>AU</option><option value=CUSTOM>Custom</option></select></div>
 <div><label class=l>MHz</label><input name=lora_freq></div><div><label class=l>BW kHz</label><input name=lora_bw></div>
@@ -232,7 +262,7 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <p class=hint>Must match your mesh exactly. US preset: 910.525 MHz, BW 62.5, SF7, CR5.</p>
 </section>
 
-<section class=card><h2>Customization</h2>
+<section class="card cl" id=c_brand><h2><span class=ti>Customization</span><span class=sum id=s_brand></span></h2>
 <div class=g>
 <div class=full><label class=l>Title</label><input name=ui_title maxlength=39 placeholder="MeshCore TAK Gateway">
 <p class=hint>Shown at the top of this page and on the device's OLED screen.</p></div>
@@ -248,16 +278,25 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <p class=hint>Shown in the page header and on both sides of the banner. PNG, JPEG, SVG or WebP; it is resized to 128 px here before upload.</p>
 </section>
 
-<section class=card><h2>System <small id=pwWarn class=hide style="color:var(--bad)">default password in use</small></h2>
+<section class="card cl" id=c_sys><h2><span class=ti>System</span><span class=sum id=s_sys></span><small id=pwWarn class=hide style="color:var(--bad)">default password in use</small></h2>
 <div class=g>
 <div><label class=l>New web password</label><input name=setup_password type=password autocomplete=new-password minlength=6 maxlength=31 placeholder="blank keeps current"></div>
 <div><label class=l>Confirm password</label><input id=pw2 type=password autocomplete=new-password maxlength=31></div>
 </div>
 <p class=hint>Sign in to this page as <b>admin</b>. The default password is <b>meshcore</b>; change it before putting the gateway on a shared network. After a change your browser asks you to sign in again.</p>
+<h3>Firmware</h3>
+<div class=kv id=fwKv style="margin-top:0"></div>
+<div class=row><button type=button class=s onclick=checkUpdate()>Check for updates</button>
+<button type=button id=fwInstall onclick=installUpdate()>Install update</button>
+<a id=fwNotes target=_blank rel=noopener style="color:var(--acc);font-size:.84rem">Release notes</a></div>
+<p class=hint>Versions are the UTC (Zulu) time the code was finished: YY.MMDD.HHMM. The gateway checks GitHub every 6 hours. Updating keeps all settings, keys and certificates.</p>
+<label class=l style="margin-top:12px">Or upload a firmware file</label>
+<div class=row style="margin-top:0"><input type=file id=fwFile accept=".bin" style="flex:1;min-width:200px"><button type=button class=s onclick=uploadFw()>Upload &amp; install</button></div>
+<p class=hint>Use <b>tak_gateway_heltec_v3.bin</b> from a GitHub release (not the _full file, which is for USB flashing).</p>
 </section>
 </form>
 
-<section class=card><h2>Portal certificates <small id=certBadge></small></h2>
+<section class="card cl" id=c_certs><h2><span class=ti>Portal certificates</span><span class=sum id=s_certs></span><small id=certBadge></small></h2>
 <p class=hint style="margin:0 0 10px">Select the Portal <b>.pem</b> and <b>.key</b>. Portal keys use 3DES which this device cannot decrypt;
 if install fails run <code>python examples/tak_gateway/tools/install_certs_to_device.py &lt;device-ip&gt; &lt;cert-folder&gt;</code> from a PC.</p>
 <div class=g><div class=full><input type=file id=certFiles multiple accept=".pem,.key,.crt,.cer"></div>
@@ -268,10 +307,6 @@ if install fails run <code>python examples/tak_gateway/tools/install_certs_to_de
 <label class=l style="margin-top:8px">Client key PEM</label><textarea id=key></textarea></details>
 <div class=row><button type=button onclick=installCerts()>Install certificates</button></div>
 </section>
-
-<section class=card><h2>Actions</h2>
-<div class=row style="margin-top:0"><button type=button onclick=testTak()>Test TAK connection</button>
-<button type=button class=s onclick=doReboot()>Reboot</button></div></section>
 </div>
 
 <div id=bar><div class=in><span>Unsaved changes</span><button type=button class=s onclick=loadForm()>Discard</button><button type=button onclick=save()>Save</button></div></div>
@@ -286,10 +321,13 @@ let mode='sym',aff='f',sample='tak_Example',dirty=false,lastStatus={};
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function toast(t){const e=$('toast');e.textContent=t;e.style.display='block';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',4000)}
 function dur(s){s=+s||0;return s>=3600?(s/3600).toFixed(s%3600?1:0)+' h':s>=60?(s/60).toFixed(s%60?1:0)+' min':s+' s'}
+function rel(s){if(s==null)return '';s=Math.floor(+s||0);
+  return s<60?s+' s':s<3600?Math.floor(s/60)+' min':s<86400?Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' m':Math.floor(s/86400)+' d '+Math.floor(s%86400/3600)+' h'}
+function ago(s,none){return s==null?(none||'never'):rel(s)+' ago'}
 function pos(col,row){return (-col*SZ)+'px '+(-row*SZ)+'px'}
 function icoHtml(col,row){return '<span class=ic style="background-position:'+pos(col,row)+'"></span>'}
 function V(n){return F.elements[n]}
-function setDirty(d){dirty=d;$('bar').classList.toggle('show',d)}
+function setDirty(d){dirty=d;$('bar').classList.toggle('show',d);if(!d)document.querySelectorAll('.card.ch').forEach(c=>c.classList.remove('ch'))}
 
 /* ---------- status ---------- */
 function setStatus(j){
@@ -297,29 +335,38 @@ function setStatus(j){
   const st=j.state||'?',ok=st==='CONNECTED',bad=/ERROR|BACKOFF/.test(st);
   $('hdot').className='dot '+(ok?'ok':bad?'bad':'warn');$('hstate').textContent='TAK '+st;
   const bw=j.lora_bw!=null?(+j.lora_bw%1?(+j.lora_bw).toFixed(1):(+j.lora_bw).toFixed(0)):'';
-  const M=[[j.batt_pct!=null?j.batt_pct+'%':'—','Battery '+(j.batt_mv?(j.batt_mv/1000).toFixed(2)+'V':'')],
-    [(j.lora_freq!=null?(+j.lora_freq).toFixed(3):'—'),(j.preset||'')+' BW'+bw+' SF'+(j.lora_sf||'')],
-    [j.wifi==='UP'?(j.rssi+' dBm'):(j.wifi||'—'),'Wi-Fi'],
-    [j.rx_packets!=null?j.rx_packets:'—','Mesh packets'],
-    [(j.adverts||0)+' / '+(j.adverts_gps||0),'Adverts / GPS'],
-    [j.nodes!=null?j.nodes:'—','On TAK map']];
-  $('met').innerHTML=M.map(m=>'<div><b>'+esc(m[0])+'</b><span>'+esc(m[1])+'</span></div>').join('');
-  $('kv').innerHTML='<b>TAK</b><span>'+esc((j.tak_host||'(not set)')+':'+(j.tak_port||'?'))+'</span>'+
-    '<b>Network</b><span>'+esc([j.ssid,j.ip].filter(Boolean).join(' · ')||'—')+'</span>'+
-    '<b>Last RX</b><span>'+(j.rx_packets?esc(j.rx_ago+' ago · RSSI '+j.rx_rssi+' · SNR '+j.rx_snr):'—')+'</span>'+
-    '<b>Last advert</b><span>'+(j.last_advert?esc(j.last_advert+(j.last_advert_gps?'':' (no GPS)')):'—')+'</span>'+
-    '<b>Last on map</b><span>'+(j.last_name&&j.last_name!=='-'?esc(j.last_name+' · '+j.last_ago+' ago'):'—')+'</span>';
-  $('serr').textContent=j.error||'';
-  $('up').textContent='up '+dur(j.uptime_s)+' · heap '+Math.round((j.heap||0)/1024)+' KB';
+  const words=s=>s.charAt(0)+s.slice(1).toLowerCase().replace(/_/g,' ');
+  const rxOld=j.rx_last_ago==null||j.rx_last_ago>1800,hrs=+j.advert_hours||0;
+  const next=j.advert_on&&j.advert_ago!=null?'next in '+rel(Math.max(0,hrs*3600-j.advert_ago)):j.advert_on?'waiting for clock':'';
+  /* [label, value, [sub lines], state, tooltip]; a sub line starting with "!" is highlighted */
+  const M=[
+    ['TAK server',ok?'Connected':words(st),ok?['for '+rel(j.tak_up)+(j.tak_connects>1?' · '+j.tak_connects+' sessions':''),'last sent '+ago(j.tak_tx_ago)]:
+      [(j.tak_host||'host not set')+':'+(j.tak_port||'?'),j.tak_connects?'was up '+j.tak_connects+'× since boot':'not connected yet'],
+      ok?'ok':bad?'bad':'warn',(j.tak_host||'')+':'+(j.tak_port||'')],
+    ['Markers sent',j.tak_points??'—',(j.tak_points?['last '+j.tak_point_name,ago(j.tak_point_ago)]:['none yet']).concat(j.tak_dropped?['!'+j.tak_dropped+' dropped (queue full)']:[]),
+      j.tak_points?'ok':''],
+    ['On TAK map',j.nodes??'—',[(j.gps_heard||0)+' GPS node'+(j.gps_heard==1?'':'s')+' heard',(j.tak_removed||0)+' removed']],
+    ['Chat bridged',(j.chat_m2t||0)+' / '+(j.chat_t2m||0),['mesh→TAK / TAK→mesh','last '+ago(j.chat_ago)]],
+    ['Mesh packets',j.rx_packets??'—',[(rxOld&&j.rx_packets?'!':'')+'last '+ago(j.rx_last_ago),j.rx_packets?'RSSI '+j.rx_rssi+' · SNR '+j.rx_snr:''],
+      j.rx_packets?(rxOld?'warn':'ok'):'warn'],
+    ['Adverts heard',j.adverts??'—',[(j.adverts_gps||0)+' with GPS · last GPS '+ago(j.gps_ago),
+      j.last_advert?j.last_advert+' · '+ago(j.adv_heard_ago):'none yet']],
+    ['Gateway advert',j.advert_on?'Every '+hrs+' h':'Off',[(j.my_adverts||0)+' sent · last '+ago(j.advert_ago,'not yet'),next]],
+    ['Radio',j.lora_freq!=null?(+j.lora_freq).toFixed(3)+' MHz':'—',[(j.preset||'')+' · BW'+bw+' SF'+(j.lora_sf||'')+' CR'+(j.lora_cr||'')]],
+    ['Wi-Fi',j.wifi==='UP'?j.rssi+' dBm':(j.wifi||'—'),[j.ssid||'',j.ip||''],j.wifi==='UP'?'ok':'bad']];
+  $('met').innerHTML=M.map(m=>'<div class="'+(m[3]||'')+'"'+(m[4]?' title="'+esc(m[4])+'"':'')+'><span>'+esc(m[0])+'</span><b>'+esc(m[1])+'</b>'+
+    (m[2]||[]).map(l=>{const w=String(l).startsWith('!');return '<em'+(w?' class=w':'')+'>'+(esc(w?l.slice(1):l)||'&nbsp;')+'</em>'}).join('')+'</div>').join('');
+  $('serr').textContent=j.error&&!ok?'Last error: '+j.error:'';
+  $('up').textContent='up '+rel(j.uptime_s)+(j.batt_mv?' · battery '+j.batt_pct+'%':'')+' · heap '+Math.round((j.heap||0)/1024)+' KB';
   const cb=$('certBadge');cb.textContent=j.certs?'installed':'not installed';cb.style.color=j.certs?'var(--acc)':'var(--bad)';
-  $('chatStat').textContent=j.chat_m2t!=null?'mesh→TAK '+j.chat_m2t+' · TAK→mesh '+j.chat_t2m:'';
   $('chatKv').innerHTML='<b>TAK uid</b><span>'+esc(j.gw_uid||'—')+'</span>';
-  $('advStat').textContent=j.advert_ago!=null?'advert sent '+dur(j.advert_ago)+' ago':'no advert sent yet';
+  $('advStat').textContent=j.advert_ago!=null?'sent '+ago(j.advert_ago):'';
   const rc=j.chat_recent||[];
   $('chatLog').innerHTML=rc.length?rc.map(m=>'<div class=cm><span class="cd '+(m.m?'mt':'tm')+'">'+(m.m?'mesh → TAK':'TAK → mesh')+
     '</span><span class=ct>'+esc(m.t)+'</span><span class=ca>'+esc(dur(m.ago))+' ago</span></div>').join(''):
     '<p class=hint style="margin:0">Nothing bridged yet. Messages appear here as they pass through.</p>';
   if(!!j.logo!==hasLogo){hasLogo=!!j.logo;applyBrand()}
+  fwUi(j);
   gpsUi();
   const s=(j.last_name&&j.last_name!=='-')?j.last_name:(j.last_advert||'');
   if(s&&s!==sample){sample=s;preview()}
@@ -327,7 +374,49 @@ function setStatus(j){
 async function refreshStatus(){
   if(document.hidden)return;
   try{const r=await fetch('/api/status',{cache:'no-store'});setStatus(await r.json())}
-  catch(e){$('hdot').className='dot bad';$('hstate').textContent='offline'}
+  catch(e){$('hdot').className='dot bad';$('hstate').textContent=updating?'restarting…':'offline'}
+}
+
+/* ---------- firmware ---------- */
+let updating=null;
+function fv(v){return v?v+'Z':'—'}
+function vWhen(v){const m=/^(\d\d)\.(\d\d)(\d\d)\.(\d\d)(\d\d)$/.exec(v||'');if(!m)return '';
+  const d=new Date(Date.UTC(2000+ +m[1],m[2]-1,+m[3],+m[4],+m[5]));return d.toISOString().slice(0,16).replace('T',' ')+' UTC · '+d.toLocaleString()}
+function fwUi(j){
+  if(updating&&j.fw!==updating.from){toast('Updated to '+fv(j.fw));updating=null}
+  $('ver').textContent='v'+fv(j.fw);$('ver').title='Built '+vWhen(j.fw);
+  const busy=j.upd_state==='installing'||j.upd_state==='rebooting',fail=j.upd_state==='failed'&&!!updating,u=$('upd');
+  u.classList.toggle('hide',!(j.upd_avail||busy||fail));
+  u.classList.toggle('bad',fail);
+  u.innerHTML=busy?'<div><b>'+esc(j.upd_msg)+'</b>'+(j.upd_state==='installing'?' · '+j.upd_progress+'%':'')+
+      '<div class=pb><i style="width:'+(j.upd_state==='rebooting'?100:j.upd_progress)+'%"></i></div></div>':
+    fail?'<div><b>Update failed:</b> '+esc(j.upd_msg)+'</div><button type=button onclick=installUpdate()>Try again</button>':
+    '<div><b>Update available: '+esc(fv(j.upd_latest))+'</b><br><span class=hint>You have '+esc(fv(j.fw))+
+      ' · <a href="'+esc(j.upd_url)+'" target=_blank rel=noopener>release notes</a></span></div><button type=button onclick=installUpdate()>Install update</button>';
+  const st=j.upd_avail?'<span style="color:var(--acc)">update available</span>':j.upd_latest?(j.upd_latest===j.fw?'up to date':j.upd_latest<j.fw?'newer than GitHub':''):'';
+  $('fwKv').innerHTML='<b>Installed</b><span>'+esc(fv(j.fw))+' <span class=hint>'+esc(vWhen(j.fw))+'</span></span>'+
+    '<b>On GitHub</b><span>'+(j.upd_latest?esc(fv(j.upd_latest))+' · '+st:'not checked yet')+
+      (j.upd_checked_ago!=null?' <span class=hint>checked '+esc(ago(j.upd_checked_ago))+'</span>':'')+'</span>'+
+    (j.upd_msg?'<b>Status</b><span'+(j.upd_state==='failed'?' class=err':'')+'>'+esc(j.upd_msg)+'</span>':'');
+  $('fwInstall').classList.toggle('hide',!j.upd_avail);$('fwNotes').href=j.upd_url||'#';
+  $('s_sys').textContent='v'+fv(j.fw)+(j.upd_avail?' · update '+fv(j.upd_latest)+' available':j.upd_latest===j.fw?' · up to date':'');
+}
+async function checkUpdate(){const r=await fetch('/api/update/check',{method:'POST'});toast(await r.text());setTimeout(refreshStatus,4000)}
+async function installUpdate(){
+  const j=lastStatus;
+  if(!confirm('Install firmware '+fv(j.upd_latest)+' from GitHub?\n\nThe gateway downloads it, restarts, and is offline for about a minute. Settings are kept.'))return;
+  const r=await fetch('/api/update/install',{method:'POST'});toast(await r.text());
+  if(r.ok)updating={from:j.fw};refreshStatus();
+}
+function uploadFw(){
+  const f=$('fwFile').files[0];if(!f)return toast('Choose a .bin file first');
+  if(/_full|merged/i.test(f.name)&&!confirm('This looks like a full-flash image, which cannot be installed over the air. Upload anyway?'))return;
+  if(!confirm('Install '+f.name+'? The gateway restarts afterwards.'))return;
+  const x=new XMLHttpRequest();x.open('POST','/api/update/upload');
+  x.upload.onprogress=e=>{if(e.lengthComputable)toast('Uploading '+Math.round(e.loaded*100/e.total)+'%')};
+  x.onload=()=>{toast(x.responseText);if(x.status===200){updating={from:lastStatus.fw};$('fwFile').value=''}};
+  x.onerror=()=>toast('Upload failed');
+  x.send(f);
 }
 
 /* ---------- icon picker ---------- */
@@ -466,6 +555,7 @@ function preview(){
     "    <contact callsign='"+xe(callsign())+"'/>\n    <remarks>"+xe(V('cot_remarks').value)+"</remarks>\n"+
     (icon?'    '+icon+'\n':'')+"    <color argb='"+argb()+"' value='"+argb()+"'/>\n"+(V('cot_archived').checked?'    <archive/>\n':'')+
     "    <takv device='MeshCore GPS Tracker' platform='MeshCore TAK Gateway' version='1.0'/>\n  </detail>\n</event>";
+  sums();
 }
 
 /* ---------- radio ---------- */
@@ -519,6 +609,7 @@ function applyBrand(){
   for(const im of [$('hlogo'),$('logoPv'),...document.querySelectorAll('#banner .bl')]){
     im.classList.toggle('hide',!hasLogo);if(hasLogo&&im.getAttribute('src')!==src)im.src=src;
   }
+  sums();
 }
 $('logoFile').onchange=async e=>{
   const f=e.target.files[0];e.target.value='';if(!f)return;
@@ -537,6 +628,38 @@ async function removeLogo(){
   await fetch('/api/logo/delete',{method:'POST'});hasLogo=false;applyBrand();toast('Logo removed');
 }
 
+/* ---------- collapsible cards ---------- */
+const CARDS=[...document.querySelectorAll('.card.cl')];
+function openCard(c,o){c.classList.toggle('open',o);c.firstElementChild.setAttribute('aria-expanded',o);
+  try{localStorage['open_'+c.id]=o?'1':'0'}catch(_){}}
+function allCards(o){CARDS.forEach(c=>openCard(c,!!o))}
+CARDS.forEach(c=>{
+  const h=c.firstElementChild,b=document.createElement('div');b.className='body';
+  while(h.nextSibling)b.appendChild(h.nextSibling);
+  c.appendChild(b);h.tabIndex=0;h.setAttribute('role','button');
+  let o=false;try{o=localStorage['open_'+c.id]==='1'}catch(_){}
+  openCard(c,o);
+  h.onclick=()=>openCard(c,!c.classList.contains('open'));
+  h.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();h.click()}};
+});
+function sums(){
+  const v=n=>V(n).value.trim(),S=(id,t)=>{$('s_'+id).textContent=t;$('s_'+id).title=t};
+  const r=[...rules('filt_prefix').map(t=>t+'…'),...rules('filt_suffix').map(t=>'…'+t),...rules('filt_contains').map(t=>'…'+t+'…')];
+  S('map',$('pvType').textContent.split(' · ')[0]+' · '+(V('name_filter').checked?(r.length?r.join(', '):'no rules set'):'all GPS nodes')+' · stale '+dur(v('stale_sec')));
+  const lat=v('chat_lat'),lon=v('chat_lon'),hasPos=lat&&lon&&!(+lat===0&&+lon===0);
+  S('node',[v('node_name')||'TAK-GW',hasPos?(+lat).toFixed(4)+', '+(+lon).toFixed(4):'no location',
+    V('advert_on').checked?'advert every '+v('advert_hours')+' h':'advert off'].join(' · '));
+  const ch=[];
+  if(V('public_on').checked)ch.push('Public → '+(v('public_room')||'MeshCore'));
+  for(let i=0;i<3;i++){const n=v('ch'+i+'_name');if(n&&V('ch'+i+'_on').checked)ch.push(n+' ↔ '+(v('ch'+i+'_room')||n))}
+  S('chat',ch.length?ch.join(' · '):'no channels bridged');
+  S('conn',(V('enabled').checked?(v('tak_host')||'no host')+':'+v('tak_port'):'TAK sending off')+' · Wi-Fi '+(v('wifi_ssid')||'not set'));
+  S('radio',V('preset').selectedOptions[0].text+' · '+v('lora_freq')+' MHz · BW'+v('lora_bw')+' SF'+v('lora_sf')+' CR'+v('lora_cr'));
+  S('brand',(v('ui_title')||'MeshCore TAK Gateway')+(V('banner_on').checked?' · banner on':'')+(hasLogo?' · logo':''));
+  S('certs','client certificate for the TAK connection');
+}
+function markCard(el){const c=el&&el.closest&&el.closest('.card.cl');if(c)c.classList.add('ch')}
+
 /* ---------- load / save ---------- */
 async function loadForm(){
   try{
@@ -547,6 +670,7 @@ async function loadForm(){
     for(let i=0;i<3;i++)V('ch'+i+'_key').value='';
     V('setup_password').value='';$('pw2').value='';$('pwWarn').classList.toggle('hide',cfg.pw_default!=='1');
     syncPreset(false);setColor(cfg.cot_color||'#0010EB');detectMode();chanUi();applyBrand();setDirty(false);
+    if(!cfg.tak_host||!cfg.wifi_ssid)$('c_conn').classList.add('open');
   }catch(e){toast('Config load failed: '+e.message)}
 }
 async function save(){
@@ -554,12 +678,12 @@ async function save(){
   for(const el of F.elements){if(!el.name)continue;o[el.name]=el.type==='checkbox'?(el.checked?'1':'0'):el.value}
   o.cot_icon=mode==='cus'?normIcon(o.cot_icon):'';
   if(o.setup_password){
-    if(o.setup_password.length<6)return toast('Web password must be at least 6 characters');
-    if(o.setup_password!==$('pw2').value)return toast('The two passwords do not match');
+    if(o.setup_password.length<6){openCard($('c_sys'),true);return toast('Web password must be at least 6 characters')}
+    if(o.setup_password!==$('pw2').value){openCard($('c_sys'),true);return toast('The two passwords do not match')}
   }
   for(let i=0;i<3;i++){
     const k=keyHex(o['ch'+i+'_key']||'');
-    if(k&&!/^([0-9a-f]{32}|[0-9a-f]{64})$/.test(k))return toast('Channel '+(i+1)+': the key must be 32 or 64 hex characters (or base64)');
+    if(k&&!/^([0-9a-f]{32}|[0-9a-f]{64})$/.test(k)){openCard($('c_chat'),true);return toast('Channel '+(i+1)+': the key must be 32 or 64 hex characters (or base64)')}
     o['ch'+i+'_key']=k;
   }
   const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});
@@ -568,6 +692,7 @@ async function save(){
   if(r.ok){setDirty(false);loadForm();refreshStatus()}
 }
 F.addEventListener('input',e=>{
+  if(e.target.type==='file')return;
   if(e.target.id==='q')return buildGrid();
   if(e.target.id==='q2')return buildSet();
   if(e.target.name==='cot_icon')buildSet();
@@ -576,9 +701,10 @@ F.addEventListener('input',e=>{
   if(e.target.name==='preset')syncPreset(true);
   if(e.target.name==='cot_color')setColor(e.target.value);
   if(e.target.name==='cot_type'){detectMode()}
-  setDirty(true);preview();
+  markCard(e.target);setDirty(true);preview();
 });
-F.addEventListener('change',e=>{if(e.target.type==='checkbox'||e.target.tagName==='SELECT'){setDirty(true);preview();chanUi();applyBrand()}});
+F.addEventListener('change',e=>{if(e.target.type==='checkbox'||e.target.tagName==='SELECT'){markCard(e.target);setDirty(true);preview();chanUi();applyBrand()}});
+F.addEventListener('click',e=>{if(e.target.closest('[data-fn],[data-i],[data-t],[data-c],[data-v],[data-m],[data-a]'))markCard(e.target)});
 F.addEventListener('submit',e=>{e.preventDefault();save()});
 $('cp').addEventListener('input',e=>setColor(e.target.value,true));
 $('mode').onclick=e=>{const m=e.target.dataset.m;if(m)setMode(m,true)};

@@ -10,8 +10,8 @@
 #include "tak/TakClient.h"
 #include "tak/TakWeb.h"
 #include "tak/TakDisplay.h"
-
-#define FIRMWARE_VER "tak-gateway-1.0.0"
+#include "tak/TakUpdate.h"
+#include "tak/TakVersion.h"
 
 StdRNG fast_rng;
 SimpleMeshTables tables;
@@ -35,13 +35,15 @@ void requestMeshAdvert() { the_mesh.requestAdvert(); }
 
 unsigned long lastMeshAdvertMs() { return the_mesh.lastAdvertMs(); }
 
+uint32_t meshAdvertsSent() { return the_mesh.advertsSent(); }
+
 static void handleSerial() {
   static String line;
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
       if (line.startsWith("status")) {
-        Serial.printf("state=%s host=%s wifi=%d ip=%s err=%s\n", tak_client.stateName(),
+        Serial.printf("version=%s state=%s host=%s wifi=%d ip=%s err=%s\n", TAK_GW_VERSION, tak_client.stateName(),
                       tak_config.prefs.tak_host, WiFi.status() == WL_CONNECTED,
                       WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "-",
                       tak_client.lastError());
@@ -67,13 +69,14 @@ void halt() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.printf("\nMeshCore TAK Gateway %s\n", FIRMWARE_VER);
+  Serial.printf("\nMeshCore TAK Gateway v%sZ\n", TAK_GW_VERSION);
 
   board.begin();
 #ifdef DISPLAY_CLASS
   if (display.begin()) {
     display.startFrame();
-    display.drawTextCentered(display.width() / 2, 28, "TAK Gateway");
+    display.drawTextCentered(display.width() / 2, 22, "TAK Gateway");
+    display.drawTextCentered(display.width() / 2, 36, "v" TAK_GW_VERSION);
     display.endFrame();
   }
   user_btn.begin();
@@ -101,6 +104,7 @@ void setup() {
 
   tak_client.begin(&tak_config, &tak_nodes);
   tak_web.begin(&tak_config, &tak_client, onRadioChanged);
+  tak_update.begin(&tak_client);
   tak_display.setRefs(&tak_config, &tak_client, &tak_nodes);
   tak_display.begin();
 
@@ -121,6 +125,7 @@ void loop() {
   the_mesh.loopGateway();
   tak_client.loop();
   tak_web.loop();
+  tak_update.loop();
   tak_display.loop();
   handleSerial();
 

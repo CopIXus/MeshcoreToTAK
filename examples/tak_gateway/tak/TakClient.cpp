@@ -200,6 +200,8 @@ bool TakClient::connectTls() {
   _last_ping_ms = millis();
   _rx_len = 0;
   _presence_due = true;  // first event on the link, so the server routes replies for our uid here
+  link.connects++;
+  link.up_since_ms = millis();
   setState(TakLinkState::Connected);
   Serial.println("[TAK] Connected");
   return true;
@@ -221,6 +223,7 @@ bool TakClient::drainInbound() {
     }
     int n = esp_tls_conn_read(TLS, _rx + _rx_len, sizeof(_rx) - 1 - _rx_len);
     if (n > 0) {
+      link.last_rx_ms = millis();
       _rx_len += n;
       _rx[_rx_len] = 0;
       processRx();
@@ -406,31 +409,51 @@ bool TakClient::queueChat(int ch, const char* sender, const char* text) {
   if (!now) return false;
   size_t n = TakCot::buildChat(_tx_buf, sizeof(_tx_buf), _gw_uid, roomFor(ch), sender, text,
                                _cfg->prefs.chat_lat, _cfg->prefs.chat_lon, now);
-  return n && enqueueXml(_tx_buf, n);
+  return n && enqueueXml(_tx_buf, n, TakEvKind::Chat);
 }
 
-bool TakClient::enqueueXml(const char* xml, size_t len) {
+bool TakClient::enqueueXml(const char* xml, size_t len, TakEvKind kind, const char* name) {
   if (!xml || len == 0 || len >= sizeof(_q[0])) return false;
   if (_q_count >= QSIZE) {
     _q_head = (_q_head + 1) % QSIZE;
     _q_count--;
+    link.dropped++;
   }
   memcpy(_q[_q_tail], xml, len);
   _q[_q_tail][len] = 0;
+  _q_kind[_q_tail] = kind;
+  utf8Copy(_q_name[_q_tail], sizeof(_q_name[0]), name);
   _q_tail = (_q_tail + 1) % QSIZE;
   _q_count++;
   return true;
 }
 
-bool TakClient::dequeueXml(char* dest, size_t dest_len, size_t& out_len) {
+bool TakClient::dequeueXml(char* dest, size_t dest_len, size_t& out_len, TakEvKind& kind, char* name,
+                           size_t name_len) {
   if (_q_count == 0) return false;
   size_t len = strlen(_q[_q_head]);
   if (len + 1 > dest_len) return false;
   memcpy(dest, _q[_q_head], len + 1);
   out_len = len;
+  kind = _q_kind[_q_head];
+  utf8Copy(name, name_len, _q_name[_q_head]);
   _q_head = (_q_head + 1) % QSIZE;
   _q_count--;
   return true;
+}
+
+void TakClient::noteSent(TakEvKind kind, const char* name) {
+  link.events++;
+  link.last_tx_ms = millis();
+  if (kind == TakEvKind::Point) {
+    link.points++;
+    link.last_point_ms = link.last_tx_ms;
+    utf8Copy(link.last_point, sizeof(link.last_point), name);
+  } else if (kind == TakEvKind::Delete) {
+    link.removed++;
+  } else if (kind == TakEvKind::Chat) {
+    link.chats++;
+  }
 }
 
 bool TakClient::queuePoint(const TakNodeRecord& node) {
@@ -443,7 +466,7 @@ bool TakClient::queuePoint(const TakNodeRecord& node) {
   }
   size_t n = TakCot::buildPoint(_tx_buf, sizeof(_tx_buf), node, _cfg->prefs, now);
   if (!n) return false;
-  return enqueueXml(_tx_buf, n);
+  return enqueueXml(_tx_buf, n, TakEvKind::Point, node.name);
 }
 
 bool TakClient::queuePing() {
@@ -470,7 +493,7 @@ bool TakClient::queueDelete(const char* uid) {
   if (!now || !uid) return false;
   size_t n = TakCot::buildDelete(_tx_buf, sizeof(_tx_buf), uid, now);
   if (!n) return false;
-  return enqueueXml(_tx_buf, n);
+  return enqueueXml(_tx_buf, n, TakEvKind::Delete);
 }
 
 void TakClient::processRefreshExpire() {
@@ -561,7 +584,7 @@ bool TakClient::testConnection(String& error_out) {
 void TakClient::loop() {
   if (!_cfg) return;
 
-  if (!_cfg->prefs.enabled) {
+  if (!_cfg->prefs.enabled || _paused) {
     if (_state != TakLinkState::Disabled) {
       disconnectTls();
       setState(TakLinkState::Disabled);
@@ -630,13 +653,18 @@ void TakClient::loop() {
         bumpBackoff();
         return;
       }
+      if (n) noteSent(TakEvKind::Other, nullptr);
     }
     size_t len = 0;
-    if (dequeueXml(_tx_buf, sizeof(_tx_buf), len)) {
+    TakEvKind kind;
+    char name[32];
+    if (dequeueXml(_tx_buf, sizeof(_tx_buf), len, kind, name, sizeof(name))) {
       int w = esp_tls_conn_write(TLS, _tx_buf, len);
       if (w < 0 || (size_t)w != len) {
         captureTlsError("write failed");
         bumpBackoff();
+      } else {
+        noteSent(kind, name);
       }
     }
   }

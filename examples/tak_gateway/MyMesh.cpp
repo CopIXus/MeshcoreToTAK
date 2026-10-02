@@ -40,6 +40,7 @@ bool MyMesh::sendSelfAdvert() {
   mesh::Packet* pkt = createAdvert(self_id, app_data, len);
   if (!pkt) return false;
   sendFlood(pkt);
+  _adverts_sent++;
   Serial.printf("[MESH] advert sent: %s %s\n", name, has_loc ? "with location" : "(no location)");
   return true;
 }
@@ -122,7 +123,11 @@ void MyMesh::onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path
   if (!_nodes || !_cfg) return;
 
   _nodes->rx.adverts++;
-  if (gps) _nodes->rx.adverts_gps++;
+  _nodes->rx.last_advert_ms = millis();
+  if (gps) {
+    _nodes->rx.adverts_gps++;
+    _nodes->rx.last_gps_ms = _nodes->rx.last_advert_ms;
+  }
   utf8Copy(_nodes->rx.last_advert_name, sizeof(_nodes->rx.last_advert_name), contact.name);
   _nodes->rx.last_advert_gps = gps;
 

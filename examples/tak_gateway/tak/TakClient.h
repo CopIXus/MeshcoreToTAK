@@ -38,6 +38,23 @@ struct TakChatStats {
   const char* last() const { return recent_n ? recent[0].text : ""; }
 };
 
+enum class TakEvKind : uint8_t { Other, Point, Delete, Chat };
+
+// Counts are of events actually written to the TAK server, not just queued.
+struct TakLinkStats {
+  uint32_t points = 0;    // marker updates
+  uint32_t removed = 0;   // marker deletes
+  uint32_t chats = 0;     // GeoChat messages (mesh -> TAK)
+  uint32_t events = 0;    // everything, incl. keepalives and the gateway contact
+  uint32_t connects = 0;  // TLS sessions opened since boot
+  uint32_t dropped = 0;   // events lost because the send queue was full
+  unsigned long up_since_ms = 0;
+  unsigned long last_tx_ms = 0;
+  unsigned long last_rx_ms = 0;
+  unsigned long last_point_ms = 0;
+  char last_point[32] = {0};
+};
+
 class TakClient {
 public:
   TakClient();
@@ -58,8 +75,13 @@ public:
   bool chatEnabled() const;
   const char* roomFor(int ch) const;
   void announce() { _presence_due = true; }
+  // Drops the TAK link (from loop()) and keeps it down, e.g. to free heap for a firmware update.
+  void pause(bool p) { _paused = p; }
+  bool idle() const { return _tls == nullptr; }
   const char* gatewayUid() const { return _gw_uid; }
   TakChatStats chat;
+  TakLinkStats link;
+  int queued() const { return _q_count; }
 
   TakLinkState state() const { return _state; }
   const char* stateName() const;
@@ -72,6 +94,7 @@ private:
   TakConfig* _cfg = nullptr;
   TakNodes* _nodes = nullptr;
   void* _tls = nullptr;  // esp_tls_t*
+  volatile bool _paused = false;
   TakLinkState _state = TakLinkState::Disabled;
   char _last_error[128];
   bool _ntp_ok = false;
@@ -89,6 +112,8 @@ private:
   char _tx_buf[2048];
   static const int QSIZE = 8;
   char _q[QSIZE][2048];
+  TakEvKind _q_kind[QSIZE];
+  char _q_name[QSIZE][32];
   int _q_head = 0, _q_tail = 0, _q_count = 0;
 
   char _rx[4096];
@@ -110,8 +135,9 @@ private:
   void disconnectTls();
   bool drainInbound();
   bool queuePing();
-  bool enqueueXml(const char* xml, size_t len);
-  bool dequeueXml(char* dest, size_t dest_len, size_t& out_len);
+  bool enqueueXml(const char* xml, size_t len, TakEvKind kind = TakEvKind::Other, const char* name = nullptr);
+  bool dequeueXml(char* dest, size_t dest_len, size_t& out_len, TakEvKind& kind, char* name, size_t name_len);
+  void noteSent(TakEvKind kind, const char* name);
   void processRefreshExpire();
   void bumpBackoff();
   void captureTlsError(const char* prefix);

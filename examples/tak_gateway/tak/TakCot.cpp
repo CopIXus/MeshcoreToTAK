@@ -1,5 +1,6 @@
 #include "TakCot.h"
 #include "TakText.h"
+#include "TakVersion.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -116,7 +117,7 @@ size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node
       "%s"
       "<color argb='%ld' value='%ld'/>"
       "%s"
-      "<takv device='MeshCore GPS Tracker' platform='MeshCore TAK Gateway' version='1.0'/>"
+      "<takv device='MeshCore GPS Tracker' platform='MeshCore TAK Gateway' version='" TAK_GW_VERSION "'/>"
       "</detail>"
       "</event>",
       node.uid, style.type, style.how, t0, t0, t1, node.lat, node.lon, call_esc, rem_esc, usericon,
@@ -204,7 +205,7 @@ size_t TakCot::buildPresence(char* dest, size_t dest_len, const char* gw_uid, co
       "<contact callsign='%s' endpoint='*:-1:stcp'/>"
       "<__group name='Cyan' role='Team Member'/>"
       "<remarks>MeshCore chat bridge: %s</remarks>"
-      "<takv device='Heltec V3' platform='MeshCore TAK Gateway' os='ESP32' version='1.0'/>"
+      "<takv device='Heltec V3' platform='MeshCore TAK Gateway' os='ESP32' version='" TAK_GW_VERSION "'/>"
       "</detail></event>",
       gw_uid, t0, t0, t1, pt, call_esc, rooms_esc);
   if (n < 0 || (size_t)n >= dest_len) return 0;

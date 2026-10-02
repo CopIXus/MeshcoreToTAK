@@ -1,0 +1,81 @@
+name: TAK Gateway Release
+
+# Every change to the gateway on main becomes a release named after its version (YY.MMDD.HHMM,
+# UTC time of the commit). Gateways check the latest release and can install it from their web page.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/tak_gateway/**'
+      - 'src/**'
+      - 'variants/heltec_v3/**'
+      - 'platformio.ini'
+      - '.github/workflows/tak-gateway-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tak-gateway-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PIO_ENV: Heltec_v3_tak_gateway
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v6
+
+      - name: Version
+        id: v
+        run: |
+          VER=$(python3 examples/tak_gateway/tools/version.py)
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if gh release view "$VER" >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; fi
+          echo "Version $VER"
+
+      - name: Setup Build Environment
+        if: steps.v.outputs.exists != 'true'
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Build Firmware
+        if: steps.v.outputs.exists != 'true'
+        env:
+          TAK_GW_VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          pio run -e "$PIO_ENV"
+          pio run -e "$PIO_ENV" -t mergebin
+
+      - name: Package
+        if: steps.v.outputs.exists != 'true'
+        env:
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          B=".pio/build/$PIO_ENV"
+          mkdir -p out
+          cp "$B/firmware.bin" out/tak_gateway_heltec_v3.bin
+          cp "$B/firmware-merged.bin" out/tak_gateway_heltec_v3_full.bin
+          printf '%s\n%s\n%s\n' "$VER" "$(md5sum out/tak_gateway_heltec_v3.bin | cut -d' ' -f1)" \
+            "$(stat -c%s out/tak_gateway_heltec_v3.bin)" > out/version.txt
+          {
+            echo "MeshCore TAK Gateway for Heltec V3, version **$VER** (UTC $(date -u -d @"$(git log -1 --format=%ct)" '+%Y-%m-%d %H:%M')Z)."
+            echo
+            echo "Changes: $(git log -1 --format=%s)"
+            echo
+            echo "- **Update over the air:** open the gateway web page, System > Firmware > Install update"
+            echo "  (or upload \`tak_gateway_heltec_v3.bin\` there)."
+            echo "- **First install over USB:** flash \`tak_gateway_heltec_v3_full.bin\` at offset 0x0."
+          } > out/notes.md
+          cat out/version.txt
+
+      - name: Publish Release
+        if: steps.v.outputs.exists != 'true'
+        env:
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          gh release create "$VER" out/tak_gateway_heltec_v3.bin out/tak_gateway_heltec_v3_full.bin out/version.txt \
+            --title "TAK Gateway $VER" --notes-file out/notes.md --target "$GITHUB_SHA" --latest

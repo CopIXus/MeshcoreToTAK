@@ -21,6 +21,8 @@ struct TakRxStats {
   uint32_t adverts = 0;      // adverts heard (with or without position)
   uint32_t adverts_gps = 0;  // adverts that carried a usable position
   uint32_t last_rx_ms = 0;
+  uint32_t last_advert_ms = 0;
+  uint32_t last_gps_ms = 0;  // last advert that carried a position
   float last_rssi = 0;
   float last_snr = 0;
   char last_advert_name[32] = {0};

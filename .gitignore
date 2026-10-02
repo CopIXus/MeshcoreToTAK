@@ -24,5 +24,6 @@ examples/tak_gateway/certs_converted/
 *.p12
 # TAK gateway: CloudTAK icon download cache (build_web_assets.py re-fetches it)
 examples/tak_gateway/tools/cloudtak_icons/
+examples/tak_gateway/tak/TakVersion.h
 __pycache__/
 

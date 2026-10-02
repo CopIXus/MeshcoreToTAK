@@ -40,6 +40,15 @@ If you edit the setup page (`examples/tak_gateway/web/index.html`), regenerate t
 python examples/tak_gateway/tools/build_web_assets.py
 ```
 
+## Versions and updates
+
+The version is the UTC (Zulu) time the code was finished, `YY.MMDD.HHMM`; for example `26.1002.1349` is 2 Oct 2026 13:49Z. It is shown on the setup page, the OLED at boot, the serial log and in the gateway's TAK contact.
+
+- A build from a clean checkout takes the time of the last commit, so it matches the GitHub release of that commit. A build with uncommitted changes takes the build time, so every modified build gets a new number.
+- Every push to `main` that touches the gateway publishes a GitHub release with that version (`.github/workflows/tak-gateway-release.yml`). It contains `tak_gateway_heltec_v3.bin` (over-the-air update), `tak_gateway_heltec_v3_full.bin` (USB flash at `0x0`) and `version.txt`.
+- The gateway checks the latest release a minute after boot and every 6 hours. When a newer one exists, the dashboard shows it; **Install update** downloads it from GitHub, verifies it and restarts. Settings, keys and certificates are kept. You can also upload a `.bin` under **System → Firmware**.
+- Downloads are checked against the GitHub root certificates in `tak/TakUpdateRoots.h`. If GitHub changes certificate authority, regenerate it with `python examples/tak_gateway/tools/make_update_roots.py`.
+
 ## Setup
 
 1. Power the gateway. With no Wi-Fi configured it starts an access point **`MeshCore-TAK-Setup`** (password `meshcoretak`). Join it and open <http://192.168.4.1>. Sign in as **`admin`** with password **`meshcore`**, and set your own password under **System**.
@@ -82,7 +91,8 @@ Any MeshCore node that includes its location in adverts will appear, for example
 | `examples/tak_gateway/main.cpp`, `MyMesh.*` | Entry point, mesh listener, chat channels, adverts |
 | `examples/tak_gateway/tak/` | Config, node table, CoT builder, TLS client, web server, OLED |
 | `examples/tak_gateway/web/index.html` | Setup page source (embedded via `TakWebAssets.h`) |
-| `examples/tak_gateway/tools/` | Asset builder and Portal certificate helpers |
+| `examples/tak_gateway/tak/TakUpdate.*` | Update check and install from GitHub releases |
+| `examples/tak_gateway/tools/` | Asset builder, version stamp, update root CAs and Portal certificate helpers |
 | `variants/heltec_v3/platformio.ini` | `Heltec_v3_tak_gateway` build environment |
 
 ## Credits and license

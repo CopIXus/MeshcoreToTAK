@@ -8,11 +8,13 @@
 #include <target.h>
 #include "TakWebAssets.h"
 #include "TakText.h"
+#include "TakUpdate.h"
 #include <Utils.h>
 
 extern void onChatConfigChanged();
 extern void requestMeshAdvert();
 extern unsigned long lastMeshAdvertMs();
+extern uint32_t meshAdvertsSent();
 
 static AsyncWebServer* g_server = nullptr;
 static TakWeb* g_web = nullptr;
@@ -446,6 +448,46 @@ void TakWeb::setupRoutes() {
     req->send(ok ? 200 : 400, "text/plain", err);
   });
 
+  g_server->on("/api/update/check", HTTP_POST, [](AsyncWebServerRequest* req) {
+    bool ok = tak_update.requestCheck();
+    req->send(ok ? 200 : 409, "text/plain", ok ? "Checking GitHub for updates" : "Update busy");
+  });
+
+  g_server->on("/api/update/install", HTTP_POST, [](AsyncWebServerRequest* req) {
+    String why;
+    bool ok = tak_update.requestInstall(why);
+    req->send(ok ? 200 : 409, "text/plain", why);
+  });
+
+  // Raw firmware .bin body (the app image, not the merged full-flash file)
+  g_server->on(
+      "/api/update/upload", HTTP_POST,
+      [](AsyncWebServerRequest* req) {},
+      nullptr,
+      [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+        static bool failed = false;
+        if (!authed(req)) return;
+        String err;
+        if (index == 0) {
+          failed = !tak_update.uploadBegin(total, err);
+          if (failed) {
+            req->send(409, "text/plain", err);
+            return;
+          }
+          req->onDisconnect([]() { tak_update.uploadAbort(); });
+        }
+        if (failed) return;
+        if (!tak_update.uploadWrite(data, len, index, total)) {
+          failed = true;
+          tak_update.uploadAbort();
+          req->send(400, "text/plain", "Firmware write failed - is this the gateway .bin?");
+          return;
+        }
+        if (index + len < total) return;
+        bool ok = tak_update.uploadEnd(err);
+        req->send(ok ? 200 : 400, "text/plain", ok ? "Firmware installed - restarting" : err);
+      });
+
   g_server->on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest* req) {
     req->send(200, "text/plain", "rebooting");
     delay(100);
@@ -563,8 +605,43 @@ String TakWeb::statusJson() const {
     j += "],";
     j += "\"gw_uid\":\"" + String(_client->gatewayUid()) + "\",";
   }
+  auto ago = [](unsigned long ms) { return ms ? String((millis() - ms) / 1000UL) : String("null"); };
+  if (_client) {
+    const TakLinkStats& l = _client->link;
+    bool up = _client->tlsConnected();
+    j += "\"tak_up\":" + (up ? ago(l.up_since_ms) : String("null")) + ",";
+    j += "\"tak_connects\":" + String(l.connects) + ",";
+    j += "\"tak_points\":" + String(l.points) + ",";
+    j += "\"tak_point_ago\":" + ago(l.last_point_ms) + ",";
+    j += "\"tak_point_name\":\"" + jsonEsc(String(l.last_point)) + "\",";
+    j += "\"tak_removed\":" + String(l.removed) + ",";
+    j += "\"tak_chats\":" + String(l.chats) + ",";
+    j += "\"tak_events\":" + String(l.events) + ",";
+    j += "\"tak_dropped\":" + String(l.dropped) + ",";
+    j += "\"tak_queue\":" + String(_client->queued()) + ",";
+    j += "\"tak_tx_ago\":" + ago(l.last_tx_ms) + ",";
+    j += "\"tak_rx_ago\":" + ago(l.last_rx_ms) + ",";
+    j += "\"chat_ago\":" + ago(_client->chat.last_ms) + ",";
+  }
+  j += "\"rx_last_ago\":" + ago(rx.last_rx_ms) + ",";
+  j += "\"adv_heard_ago\":" + ago(rx.last_advert_ms) + ",";
+  j += "\"gps_ago\":" + ago(rx.last_gps_ms) + ",";
+  j += "\"gps_heard\":" + String(tak_nodes.count()) + ",";
+  j += "\"my_adverts\":" + String(meshAdvertsSent()) + ",";
+  if (_cfg) {
+    j += String("\"advert_on\":") + (_cfg->prefs.advert_on ? "true" : "false") + ",";
+    j += "\"advert_hours\":" + String(_cfg->prefs.advert_hours) + ",";
+  }
   unsigned long adv = lastMeshAdvertMs();
-  j += "\"advert_ago\":" + (adv ? String((millis() - adv) / 1000UL) : String("null")) + ",";
+  j += "\"advert_ago\":" + ago(adv) + ",";
+  j += "\"fw\":\"" + String(TakUpdate::current()) + "\",";
+  j += "\"upd_state\":\"" + String(tak_update.stateName()) + "\",";
+  j += "\"upd_latest\":\"" + String(tak_update.latest()) + "\",";
+  j += String("\"upd_avail\":") + (tak_update.available() ? "true" : "false") + ",";
+  j += "\"upd_progress\":" + String(tak_update.progress()) + ",";
+  j += "\"upd_msg\":\"" + jsonEsc(String(tak_update.message())) + "\",";
+  j += "\"upd_checked_ago\":" + ago(tak_update.checkedMs()) + ",";
+  j += "\"upd_url\":\"" + String(TakUpdate::releaseUrl()) + "\",";
   j += String("\"logo\":") + (_cfg && SPIFFS.exists(_cfg->logoPath()) ? "true" : "false");
   j += "}";
   return j;
