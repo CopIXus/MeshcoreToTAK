@@ -1,4 +1,5 @@
 #include "TakNodes.h"
+#include "TakText.h"
 #include <string.h>
 #include <ctype.h>
 
@@ -139,8 +140,7 @@ TakNodeRecord* TakNodes::upsertFromContact(const ContactInfo& contact, const uin
     if (_count < TAK_MAX_NODES) _count++;
   }
 
-  strncpy(_nodes[slot].name, contact.name, sizeof(_nodes[slot].name) - 1);
-  _nodes[slot].name[sizeof(_nodes[slot].name) - 1] = 0;
+  utf8Copy(_nodes[slot].name, sizeof(_nodes[slot].name), contact.name);
   _nodes[slot].lat = ((double)contact.gps_lat) / 1000000.0;
   _nodes[slot].lon = ((double)contact.gps_lon) / 1000000.0;
   _nodes[slot].last_heard_ms = millis();

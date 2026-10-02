@@ -1,6 +1,7 @@
 #include "TakClient.h"
 #include "TakCot.h"
 #include "TakCerts.h"
+#include "TakText.h"
 #include <WiFi.h>
 #include <time.h>
 #include <string.h>
@@ -355,9 +356,9 @@ void TakClient::handleEvent(const char* ev) {
   }
   TakChatIn& m = _in[(_in_head + _in_count) % IN_SIZE];
   m.ch = ch;
-  strncpy(m.sender, sender[0] ? sender : "TAK", sizeof(m.sender) - 1);
-  m.sender[sizeof(m.sender) - 1] = 0;
+  utf8Copy(m.sender, sizeof(m.sender), sender[0] ? sender : "TAK");
   xmlUnescape(gt + 1, close - gt - 1, m.text, sizeof(m.text));
+  utf8TrimTail(m.text);
   if (!m.text[0]) return;
   _in_count++;
   Serial.printf("[CHAT] TAK %s -> mesh ch%d: %s\n", m.sender, ch, m.text);
@@ -396,6 +397,7 @@ void TakClient::noteChat(bool from_mesh, int ch, const char* sender, const char*
   m.from_mesh = from_mesh;
   m.ms = chat.last_ms;
   snprintf(m.text, sizeof(m.text), "[%s] %s: %s", roomFor(ch), sender, text);
+  utf8TrimTail(m.text);
 }
 
 bool TakClient::queueChat(int ch, const char* sender, const char* text) {

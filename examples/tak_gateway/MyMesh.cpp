@@ -1,6 +1,7 @@
 #include "MyMesh.h"
 #include <SPIFFS.h>
 #include <helpers/AdvertDataHelpers.h>
+#include "tak/TakText.h"
 
 void MyMesh::beginFs() {
   BaseChatMesh::begin();
@@ -122,8 +123,7 @@ void MyMesh::onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path
 
   _nodes->rx.adverts++;
   if (gps) _nodes->rx.adverts_gps++;
-  strncpy(_nodes->rx.last_advert_name, contact.name, sizeof(_nodes->rx.last_advert_name) - 1);
-  _nodes->rx.last_advert_name[sizeof(_nodes->rx.last_advert_name) - 1] = 0;
+  utf8Copy(_nodes->rx.last_advert_name, sizeof(_nodes->rx.last_advert_name), contact.name);
   _nodes->rx.last_advert_gps = gps;
 
   // GPS is checked first (upsert rejects adverts without a position), then the name rules.
@@ -177,6 +177,12 @@ void MyMesh::loopGateway() {
     ChannelDetails d;
     if (!getChannel(m.ch, d)) return;
     uint32_t ts = getRTCClock()->getCurrentTime();
+    // sendGroupMessage cuts "<sender>: <text>" to MAX_TEXT_LEN bytes; cut on a character boundary first
+    int room = MAX_TEXT_LEN - (int)strlen(m.sender) - 2;
+    if (room > 0 && (int)strlen(m.text) > room) {
+      m.text[room] = 0;
+      utf8TrimTail(m.text);
+    }
     if (sendGroupMessage(ts, d.channel, m.sender, m.text, strlen(m.text))) {
       _client->noteChat(false, m.ch, m.sender, m.text);
     } else {

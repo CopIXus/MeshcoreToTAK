@@ -44,6 +44,8 @@ protected:
   float getAirtimeBudgetFactor() const override { return 2.0f; }  // listen-heavy
   int calcRxDelay(float score, uint32_t air_time) const override { return 0; }
   bool allowPacketForward(const mesh::Packet* packet) override { return false; }
+  // SX1262 receivers can go deaf after hours of uptime; a periodic AGC reset keeps them listening.
+  int getAGCResetInterval() const override { return 60000; }
 
   void logRx(mesh::Packet* packet, int len, float score) override;
   void onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path_len, const uint8_t* path) override;

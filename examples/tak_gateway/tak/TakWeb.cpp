@@ -7,6 +7,7 @@
 #include <SPIFFS.h>
 #include <target.h>
 #include "TakWebAssets.h"
+#include "TakText.h"
 #include <Utils.h>
 
 extern void onChatConfigChanged();
@@ -455,8 +456,14 @@ void TakWeb::setupRoutes() {
 static String jsonEsc(const String& s) {
   String o;
   o.reserve(s.length() + 8);
-  for (size_t i = 0; i < s.length(); i++) {
-    char c = s[i];
+  const char* p = s.c_str();
+  for (size_t i = 0; i < s.length();) {
+    char c = p[i];
+    size_t n = utf8SeqLen(p + i);
+    if (!n) {
+      i++;  // invalid / truncated UTF-8
+      continue;
+    }
     if (c == '"' || c == '\\') {
       o += '\\';
       o += c;
@@ -467,8 +474,9 @@ static String jsonEsc(const String& s) {
     } else if ((uint8_t)c < 0x20) {
       // skip control chars
     } else {
-      o += c;
+      o.concat(p + i, n);
     }
+    i += n;
   }
   return o;
 }

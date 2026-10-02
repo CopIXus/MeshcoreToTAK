@@ -1,29 +1,40 @@
 #include "TakCot.h"
+#include "TakText.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
+// Output is always valid UTF-8 XML text: invalid or truncated sequences and XML-illegal
+// control characters are dropped, and a character that does not fit whole is not started.
 void TakCot::xmlEscape(const char* in, char* out, size_t out_len) {
   size_t o = 0;
   if (!in) {
     out[0] = 0;
     return;
   }
-  for (size_t i = 0; in[i] && o + 6 < out_len; i++) {
+  for (size_t i = 0; in[i];) {
     char c = in[i];
+    size_t n = utf8SeqLen(in + i);
+    if (!n) {
+      i++;
+      continue;
+    }
     const char* rep = nullptr;
     if (c == '&') rep = "&amp;";
     else if (c == '<') rep = "&lt;";
     else if (c == '>') rep = "&gt;";
     else if (c == '"') rep = "&quot;";
     else if (c == '\'') rep = "&apos;";
-    if (rep) {
-      size_t n = strlen(rep);
-      memcpy(out + o, rep, n);
-      o += n;
-    } else {
-      out[o++] = c;
+    else if ((uint8_t)c < 0x20 && c != '\t' && c != '\n' && c != '\r') {
+      i++;
+      continue;
     }
+    const char* src = rep ? rep : in + i;
+    size_t len = rep ? strlen(rep) : n;
+    if (o + len >= out_len) break;
+    memcpy(out + o, src, len);
+    o += len;
+    i += n;
   }
   out[o] = 0;
 }
