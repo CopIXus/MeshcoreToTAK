@@ -134,7 +134,8 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 .lg{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .lg img{max-height:64px;max-width:140px;background:#0d131b;border-radius:8px;padding:4px}
 .frow{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px;background:var(--card2)}
-.frow .sw{flex:1;min-width:0}
+.frow .sw{flex:0 1 auto;min-width:0;max-width:42%}
+.frow>.hint{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .frow .sw b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .frow button{padding:5px 8px;font-size:.75rem}
 .fdot{flex:none;width:14px;height:14px;border-radius:50%;border:1px solid var(--line)}
@@ -204,9 +205,22 @@ dialog::backdrop{background:rgba(6,10,16,.7)}
 <p class=hint>Pick above, or paste a path from another iconset (uid:Group/icon also accepted). Other iconsets must be installed on every client.</p></div>
 
 <h3>Color</h3>
-<div class=colr><input type=color id=cp><input id=cot_color id=chex maxlength=7 style="width:96px" placeholder="#RRGGBB"><div class=sws id=sws></div></div>
+<div class=colr><input type=color id=cp><input id=cot_color maxlength=7 style="width:96px" placeholder="#RRGGBB"><div class=sws id=sws></div></div>
 <div class=g style="margin-top:10px"><div><label class=l>Opacity <span class=dur id=opv></span></label><input type=range id=cot_opacity min=10 max=100 step=5></div></div>
 <p class=hint id=colHint></p>
+
+<h3>Details</h3>
+<div class=g>
+<div class=full><label class=l>Remarks</label><input id=cot_remarks maxlength=63></div>
+<div><label class=l>How</label><input id=cot_how list=hows maxlength=15></div>
+<label class=sw style="align-self:end;padding-bottom:8px"><input type=checkbox id=cot_archived><i></i>Archive on clients</label>
+</div>
+<datalist id=hows><option value=m-g>Machine GPS<option value=h-g-i-g-o>Human GIGO<option value=h-e>Human estimated<option value=m-f>Machine fused</datalist>
+
+<details><summary>Advanced · CoT type &amp; XML preview</summary>
+<div class=g style="margin-top:10px"><div class=full><label class=l>CoT type</label><input id=cot_type maxlength=31></div></div>
+<label class=l style="margin-top:10px">Message sent to TAK</label><pre id=xml></pre>
+</details>
 
 <div class=row style="margin-top:14px"><button type=button id=dlgOk>Done</button><button type=button class=s id=dlgCancel>Cancel</button></div>
 </dialog>
@@ -221,19 +235,6 @@ dialog::backdrop{background:rgba(6,10,16,.7)}
 <div class=chips data-f=max_age_sec><button type=button data-v=1800>30m</button><button type=button data-v=7200>2h</button><button type=button data-v=21600>6h</button><button type=button data-v=50400>14h</button></div></div>
 </div>
 <p class=hint>Stale: when TAK greys the marker out. Remove: drop a node that has not advertised for this long (repeaters advert about every 12 h).</p>
-
-<h3>Details</h3>
-<div class=g>
-<div class=full><label class=l>Remarks</label><input name=cot_remarks maxlength=63></div>
-<div><label class=l>How</label><input name=cot_how list=hows maxlength=15></div>
-<label class=sw style="align-self:end;padding-bottom:8px"><input type=checkbox name=cot_archived><i></i>Archive on clients</label>
-</div>
-<datalist id=hows><option value=m-g>Machine GPS<option value=h-g-i-g-o>Human GIGO<option value=h-e>Human estimated<option value=m-f>Machine fused</datalist>
-
-<details><summary>Advanced · CoT type &amp; XML preview</summary>
-<div class=g style="margin-top:10px"><div class=full><label class=l>CoT type</label><input name=cot_type maxlength=31></div></div>
-<label class=l style="margin-top:10px">Message sent to TAK</label><pre id=xml></pre>
-</details>
 </section>
 
 <section class="card cl" id=c_node><h2><span class=ti>Gateway node</span><span class=sum id=s_node></span><small id=advStat></small></h2>
@@ -342,6 +343,7 @@ if install fails run <code>python examples/tak_gateway/tools/install_certs_to_de
 
 <script>
 const IX=__ICON_INDEX__,SZ=IX.sz,F=document.getElementById('f'),$=id=>document.getElementById(id);
+document.body.appendChild($('cotDlg'));
 const PRESETS={US:[910.525,62.5,7,5],EU:[869.618,62.5,8,5],AU:[916.8,250,11,5]};
 const SWATCH=['#FFFFFF','#FFFF00','#FF7F00','#FF00FF','#FF0000','#8B4513','#00FF00','#00FFFF','#0010EB','#000000'];
 const MK=[['b-m-p-s-m','Spot map',null]].concat(IX.mk.map((m,i)=>[m[0],m[1],i]));
@@ -452,7 +454,7 @@ function uploadFw(){
 /* ---------- icon picker ---------- */
 function parseType(t){const m=/^a-([a-z])-(.+)$/.exec(t||'');return m?{a:m[1],fn:m[2]}:null}
 function buildGrid(){
-  const q=$('q').value.trim().toLowerCase(),col=IX.aff.indexOf(aff),cur=parseType(V('cot_type').value);
+  const q=$('q').value.trim().toLowerCase(),col=IX.aff.indexOf(aff),cur=parseType($('cot_type').value);
   let h='',grp='';
   IX.fn.forEach((f,row)=>{
     if(q&&!(f[1]+' '+f[0]+' '+f[2]).toLowerCase().includes(q))return;
@@ -463,9 +465,9 @@ function buildGrid(){
   $('grid').innerHTML=h||'<p class=hint>No match</p>';
 }
 function buildMk(){
-  const t=V('cot_type').value;
+  const t=$('cot_type').value;
   $('mkgrid').innerHTML=MK.map(m=>'<button type=button class="t'+(t===m[0]?' on':'')+'" data-t="'+m[0]+'">'+
-    (m[2]==null?'<span class=spot style="background:'+esc(V('cot_color').value||'#fff')+'"></span>':icoHtml(m[2],IX.fn.length))+esc(m[1])+'</button>').join('');
+    (m[2]==null?'<span class=spot style="background:'+esc($('cot_color').value||'#fff')+'"></span>':icoHtml(m[2],IX.fn.length))+esc(m[1])+'</button>').join('');
 }
 /* ATAK / TAK Portal match usericons by exact "uid/Group/file.png" */
 function normIcon(p){
@@ -481,7 +483,7 @@ function ic2Html(i,tint){const c=IX.set.cols,p=pos(i%c,Math.floor(i/c));
   return tint?'<span class=ic2 style="background:'+esc(tint)+';-webkit-mask:url(/iconset.png) '+p+' no-repeat;mask:url(/iconset.png) '+p+' no-repeat"></span>'
     :'<span class=ic2 style="background-position:'+p+'"></span>'}
 function buildSet(){
-  const q=$('q2').value.trim().toLowerCase(),cur=setIdx(V('cot_icon').value);
+  const q=$('q2').value.trim().toLowerCase(),cur=setIdx($('cot_icon').value);
   let h='',grp='';
   IX.set.items.forEach((it,i)=>{
     const g=it[0].split('/')[0];
@@ -496,31 +498,31 @@ function setMode(m,user){
   for(const b of $('mode').children)b.classList.toggle('on',b.dataset.m===m);
   $('pSym').classList.toggle('hide',m!=='sym');$('pMk').classList.toggle('hide',m!=='mk');$('pCus').classList.toggle('hide',m!=='cus');
   if(user){
-    const t=V('cot_type').value;
-    if(m==='sym'&&!parseType(t))V('cot_type').value='a-'+aff+'-G-U-U-S-R';
-    if(m==='mk'&&!t.startsWith('b-'))V('cot_type').value='b-m-p-s-m';
-    if(m==='cus'&&!V('cot_icon').value)V('cot_icon').value=IX.set.uid+'/'+IX.set.items[0][0];
+    const t=$('cot_type').value;
+    if(m==='sym'&&!parseType(t))$('cot_type').value='a-'+aff+'-G-U-U-S-R';
+    if(m==='mk'&&!t.startsWith('b-'))$('cot_type').value='b-m-p-s-m';
+    if(m==='cus'&&!$('cot_icon').value)$('cot_icon').value=IX.set.uid+'/'+IX.set.items[0][0];
     setDirty(true);
   }
   buildGrid();buildMk();buildSet();preview();
 }
 function setAff(a,user){
   aff=a;for(const b of $('aff').children)b.classList.toggle('on',b.dataset.a===a);
-  const p=parseType(V('cot_type').value);
-  if(user&&p){V('cot_type').value='a-'+a+'-'+p.fn;setDirty(true)}
+  const p=parseType($('cot_type').value);
+  if(user&&p){$('cot_type').value='a-'+a+'-'+p.fn;setDirty(true)}
   buildGrid();preview();
 }
 function detectMode(){
-  const t=V('cot_type').value,p=parseType(t);
+  const t=$('cot_type').value,p=parseType(t);
   if(p&&IX.aff.includes(p.a))aff=p.a;
   for(const b of $('aff').children)b.classList.toggle('on',b.dataset.a===aff);
-  setMode(V('cot_icon').value?'cus':(t.startsWith('b-')?'mk':'sym'));
+  setMode($('cot_icon').value?'cus':(t.startsWith('b-')?'mk':'sym'));
 }
 
 /* ---------- color ---------- */
 function setColor(c,user){
   c=(c||'').toUpperCase();if(!/^#[0-9A-F]{6}$/.test(c))return;
-  V('cot_color').value=c;$('cp').value=c.toLowerCase();
+  $('cot_color').value=c;$('cp').value=c.toLowerCase();
   for(const b of $('sws').children)b.classList.toggle('on',b.dataset.c===c);
   if(user)setDirty(true);buildMk();preview();
 }
@@ -581,9 +583,11 @@ function loadEditor(s){
   setColor(s.color||'#0010EB');detectMode();
 }
 function openStyle(i){
-  editIdx=i;editSnap=JSON.stringify(i<0?DEF:FL[i]);
-  $('dlgFilt').classList.toggle('hide',i<0);
+  if(i<0&&!DEF)DEF=blankStyle();
   const s=i<0?DEF:FL[i];
+  if(!s)return;
+  editIdx=i;editSnap=JSON.stringify(s);
+  $('dlgFilt').classList.toggle('hide',i<0);
   $('f_label').value=s.label||'';$('f_mode').value=String(s.mode||0);$('f_match').value=s.match||'';$('f_strip').checked=!!s.strip;
   loadEditor(s);$('cotDlg').showModal();
 }
@@ -624,14 +628,14 @@ function gpsUi(){
     '</div><p class=hint>GPS nodes heard: '+g.length+' · sent: '+sent+(dirty?' (unsaved)':'')+'</p>';
 }
 function argb(){
-  const c=V('cot_color').value,m=/^#([0-9a-f]{6})$/i.exec(c);if(!m)return -1;
-  const a=Math.round((+V('cot_opacity').value||100)*2.55);return ((a<<24)|parseInt(m[1],16))|0;
+  const c=$('cot_color').value,m=/^#([0-9a-f]{6})$/i.exec(c);if(!m)return -1;
+  const a=Math.round((+$('cot_opacity').value||100)*2.55);return ((a<<24)|parseInt(m[1],16))|0;
 }
 function xe(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]))}
 function preview(){
-  const t=V('cot_type').value,c=V('cot_color').value||'#FFFFFF',p=parseType(t);
+  const t=$('cot_type').value,c=$('cot_color').value||'#FFFFFF',p=parseType(t);
   let ic='';
-  if(mode==='cus'){const si=setIdx(V('cot_icon').value);
+  if(mode==='cus'){const si=setIdx($('cot_icon').value);
     ic=si>=0?ic2Html(si,c):'<span class=spot style="background:'+esc(c)+';border-radius:50% 50% 50% 0;transform:rotate(-45deg)"></span>'}
   else if(t==='b-m-p-s-m')ic='<span class=spot style="background:'+esc(c)+'"></span>';
   else{
@@ -644,20 +648,20 @@ function preview(){
   let label=t;
   if(p){const f=IX.fn.find(f=>f[0]===p.fn);if(f)label=({f:'Friendly',h:'Hostile',n:'Neutral',u:'Unknown'}[p.a]||'')+' '+f[1]+' · '+t}
   const mk=MK.find(m=>m[0]===t);if(mk)label=mk[1]+' · '+t;
-  if(mode==='cus'){const si=setIdx(V('cot_icon').value);label=(si>=0?IX.set.items[si][1]+' · ':'')+(normIcon(V('cot_icon').value)||'(no path)')}
+  if(mode==='cus'){const si=setIdx($('cot_icon').value);label=(si>=0?IX.set.items[si][1]+' · ':'')+(normIcon($('cot_icon').value)||'(no path)')}
   $('pvType').textContent=label;
   $('pvMeta').textContent='Stale '+dur(V('stale_sec').value)+' · re-send '+dur(V('refresh_sec').value)+' · remove '+dur(V('max_age_sec').value);
-  $('opv').textContent=V('cot_opacity').value+'%';
+  $('opv').textContent=$('cot_opacity').value+'%';
   for(const n of ['stale_sec','refresh_sec','max_age_sec'])$('d_'+n).textContent=dur(V(n).value);
   $('colHint').textContent=mode==='sym'?'2525 symbols keep their affiliation color on most clients; color still applies in CloudTAK labels and lists.':'';
   gpsUi();
   const now=new Date(),iso=d=>d.toISOString().replace(/\.\d+Z$/,'.000Z'),st=new Date(now.getTime()+(+V('stale_sec').value||0)*1000);
-  const ip=mode==='cus'?normIcon(V('cot_icon').value):'';
+  const ip=mode==='cus'?normIcon($('cot_icon').value):'';
   const icon=ip?"<usericon iconsetpath='"+xe(ip)+"'/>":t==='b-m-p-s-m'?"<usericon iconsetpath='COT_MAPPING_SPOTMAP/b-m-p-s-m/"+argb()+"'/>":'';
-  $('xml').textContent="<event version='2.0' uid='meshcore-…' type='"+xe(t)+"' how='"+xe(V('cot_how').value)+"' time='"+iso(now)+"' start='"+iso(now)+"' stale='"+iso(st)+"'>\n"+
+  $('xml').textContent="<event version='2.0' uid='meshcore-…' type='"+xe(t)+"' how='"+xe($('cot_how').value)+"' time='"+iso(now)+"' start='"+iso(now)+"' stale='"+iso(st)+"'>\n"+
     "  <point lat='…' lon='…' hae='9999999.0' ce='9999999.0' le='9999999.0'/>\n  <detail>\n"+
-    "    <contact callsign='"+xe(callsign())+"'/>\n    <remarks>"+xe(V('cot_remarks').value)+"</remarks>\n"+
-    (icon?'    '+icon+'\n':'')+"    <color argb='"+argb()+"' value='"+argb()+"'/>\n"+(V('cot_archived').checked?'    <archive/>\n':'')+
+    "    <contact callsign='"+xe(callsign())+"'/>\n    <remarks>"+xe($('cot_remarks').value)+"</remarks>\n"+
+    (icon?'    '+icon+'\n':'')+"    <color argb='"+argb()+"' value='"+argb()+"'/>\n"+($('cot_archived').checked?'    <archive/>\n':'')+
     "    <takv device='MeshCore GPS Tracker' platform='MeshCore TAK Gateway' version='1.0'/>\n  </detail>\n</event>";
   sums();
 }
@@ -825,13 +829,22 @@ F.addEventListener('change',e=>{
 });
 F.addEventListener('click',e=>{if(e.target.closest('[data-fn],[data-i],[data-t],[data-c],[data-v],[data-m],[data-a]'))markCard(e.target)});
 F.addEventListener('submit',e=>{e.preventDefault();save()});
+$('cotDlg').addEventListener('input',e=>{
+  if(e.target.id==='q')return buildGrid();
+  if(e.target.id==='q2')return buildSet();
+  if(e.target.id==='cot_icon')buildSet();
+  if(e.target.id==='cot_color')setColor(e.target.value);
+  if(e.target.id==='cot_type')detectMode();
+  preview();
+});
+$('cotDlg').addEventListener('change',()=>preview());
 $('cp').addEventListener('input',e=>setColor(e.target.value,true));
 $('mode').onclick=e=>{const m=e.target.dataset.m;if(m)setMode(m,true)};
 $('aff').onclick=e=>{const a=e.target.dataset.a;if(a)setAff(a,true)};
-$('grid').onclick=e=>{const b=e.target.closest('[data-fn]');if(!b)return;V('cot_type').value='a-'+aff+'-'+b.dataset.fn;setDirty(true);buildGrid();preview()};
-$('setgrid').onclick=e=>{const b=e.target.closest('[data-i]');if(!b)return;V('cot_icon').value=IX.set.uid+'/'+IX.set.items[+b.dataset.i][0];setDirty(true);buildSet();preview()};
-V('cot_icon').addEventListener('blur',e=>{const n=normIcon(e.target.value);if(n!==e.target.value){e.target.value=n;buildSet();preview()}});
-$('mkgrid').onclick=e=>{const b=e.target.closest('[data-t]');if(!b)return;V('cot_type').value=b.dataset.t;setDirty(true);buildMk();preview()};
+$('grid').onclick=e=>{const b=e.target.closest('[data-fn]');if(!b)return;$('cot_type').value='a-'+aff+'-'+b.dataset.fn;setDirty(true);buildGrid();preview()};
+$('setgrid').onclick=e=>{const b=e.target.closest('[data-i]');if(!b)return;$('cot_icon').value=IX.set.uid+'/'+IX.set.items[+b.dataset.i][0];setDirty(true);buildSet();preview()};
+$('cot_icon').addEventListener('blur',e=>{const n=normIcon(e.target.value);if(n!==e.target.value){e.target.value=n;buildSet();preview()}});
+$('mkgrid').onclick=e=>{const b=e.target.closest('[data-t]');if(!b)return;$('cot_type').value=b.dataset.t;setDirty(true);buildMk();preview()};
 $('sws').innerHTML=SWATCH.map(c=>'<button type=button data-c="'+c+'" title="'+c+'" style="background:'+c+'"></button>').join('');
 $('sws').onclick=e=>{const c=e.target.dataset.c;if(c)setColor(c,true)};
 document.querySelectorAll('.chips').forEach(ch=>ch.onclick=e=>{const v=e.target.dataset.v;if(!v)return;V(ch.dataset.f).value=v;setDirty(true);preview()});
