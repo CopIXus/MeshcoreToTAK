@@ -392,7 +392,7 @@ function fwUi(j){
   const busy=j.upd_state==='installing'||j.upd_state==='rebooting',fail=j.upd_state==='failed'&&!!updating,u=$('upd'),p=$('updPill');
   p.classList.toggle('hide',!(j.upd_avail||busy));p.disabled=busy;
   p.innerHTML=busy?(j.upd_state==='rebooting'?'Restarting…':'Updating '+j.upd_progress+'%'):
-    '↑ Update<span class=uv> to v'+esc(fv(j.upd_latest))+'</span>';
+    '↑ Update<span class=uv>to v'+esc(fv(j.upd_latest))+'</span>';
   p.title=busy?j.upd_msg:'Install firmware '+fv(j.upd_latest)+' (you have '+fv(j.fw)+')';
   u.classList.toggle('hide',!(busy||fail));
   u.classList.toggle('bad',fail);
