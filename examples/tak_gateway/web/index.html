@@ -67,7 +67,10 @@ background:#17291f;border-radius:8px;margin-bottom:10px;font-size:.88rem}
 .upd.bad{border-color:var(--bad);background:#2a1519}.upd>div{flex:1;min-width:200px}
 .upd a{color:var(--acc);font-size:.8rem}
 .pb{height:6px;background:var(--field);border-radius:3px;overflow:hidden;margin-top:6px}.pb i{display:block;height:100%;background:var(--acc);transition:width .3s}
-.ver{font:600 .72rem ui-monospace,Consolas,monospace;color:var(--muted)}
+.hv{font:600 .7rem ui-monospace,Consolas,monospace;text-transform:none;letter-spacing:.02em}
+.upill{border:0;cursor:pointer;background:#17291f;color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset;flex:none}
+.upill:hover{background:#1f3a2a}.upill:disabled{cursor:default;opacity:.85}
+@media(max-width:480px){.upill .uv{display:none}}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:.84rem;margin-top:10px}
 .kv b{color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;padding-top:2px}
 .err{color:var(--bad)}
@@ -131,10 +134,10 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 .lg{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .lg img{max-height:64px;max-width:140px;background:#0d131b;border-radius:8px;padding:4px}
 </style></head><body><div class=wrap>
-<header><img id=hlogo class=hide alt=""><div class=ht><h1 id=htitle>MeshCore TAK Gateway</h1><small id=hsub class=hide>MeshCore TAK Gateway</small></div><span class=pill><span id=hdot class=dot></span><span id=hstate>…</span></span></header>
+<header><img id=hlogo class=hide alt=""><div class=ht><h1 id=htitle>MeshCore TAK Gateway</h1><small id=hsub><span id=hname class=hide>MeshCore TAK Gateway · </span><span id=hver class=hv></span></small></div><button type=button id=updPill class="pill upill hide" onclick=installUpdate()></button><span class=pill><span id=hdot class=dot></span><span id=hstate>…</span></span></header>
 <div id=banner class=hide><img class=bl alt=""><span id=btext></span><img class=bl alt=""></div>
 
-<section class=card><h2>Dashboard <span class=ver id=ver></span><small id=up></small></h2>
+<section class=card><h2>Dashboard <small id=up></small></h2>
 <div id=upd class="upd hide"></div>
 <div class=m id=met></div><div id=serr class=err style="margin-top:8px;font-size:.84rem"></div>
 <h3>Recent messages</h3>
@@ -385,15 +388,17 @@ function vWhen(v){const m=/^(\d\d)\.(\d\d)(\d\d)\.(\d\d)(\d\d)$/.exec(v||'');if(
   const d=new Date(Date.UTC(2000+ +m[1],m[2]-1,+m[3],+m[4],+m[5]));return d.toISOString().slice(0,16).replace('T',' ')+' UTC · '+d.toLocaleString()}
 function fwUi(j){
   if(updating&&j.fw!==updating.from){toast('Updated to '+fv(j.fw));updating=null}
-  $('ver').textContent='v'+fv(j.fw);$('ver').title='Built '+vWhen(j.fw);
-  const busy=j.upd_state==='installing'||j.upd_state==='rebooting',fail=j.upd_state==='failed'&&!!updating,u=$('upd');
-  u.classList.toggle('hide',!(j.upd_avail||busy||fail));
+  $('hver').textContent='v'+fv(j.fw);$('hver').title='Built '+vWhen(j.fw);
+  const busy=j.upd_state==='installing'||j.upd_state==='rebooting',fail=j.upd_state==='failed'&&!!updating,u=$('upd'),p=$('updPill');
+  p.classList.toggle('hide',!(j.upd_avail||busy));p.disabled=busy;
+  p.innerHTML=busy?(j.upd_state==='rebooting'?'Restarting…':'Updating '+j.upd_progress+'%'):
+    '↑ Update<span class=uv> to v'+esc(fv(j.upd_latest))+'</span>';
+  p.title=busy?j.upd_msg:'Install firmware '+fv(j.upd_latest)+' (you have '+fv(j.fw)+')';
+  u.classList.toggle('hide',!(busy||fail));
   u.classList.toggle('bad',fail);
   u.innerHTML=busy?'<div><b>'+esc(j.upd_msg)+'</b>'+(j.upd_state==='installing'?' · '+j.upd_progress+'%':'')+
       '<div class=pb><i style="width:'+(j.upd_state==='rebooting'?100:j.upd_progress)+'%"></i></div></div>':
-    fail?'<div><b>Update failed:</b> '+esc(j.upd_msg)+'</div><button type=button onclick=installUpdate()>Try again</button>':
-    '<div><b>Update available: '+esc(fv(j.upd_latest))+'</b><br><span class=hint>You have '+esc(fv(j.fw))+
-      ' · <a href="'+esc(j.upd_url)+'" target=_blank rel=noopener>release notes</a></span></div><button type=button onclick=installUpdate()>Install update</button>';
+    fail?'<div><b>Update failed:</b> '+esc(j.upd_msg)+'</div><button type=button onclick=installUpdate()>Try again</button>':'';
   const st=j.upd_avail?'<span style="color:var(--acc)">update available</span>':j.upd_latest?(j.upd_latest===j.fw?'up to date':j.upd_latest<j.fw?'newer than GitHub':''):'';
   $('fwKv').innerHTML='<b>Installed</b><span>'+esc(fv(j.fw))+' <span class=hint>'+esc(vWhen(j.fw))+'</span></span>'+
     '<b>On GitHub</b><span>'+(j.upd_latest?esc(fv(j.upd_latest))+' · '+st:'not checked yet')+
@@ -603,7 +608,7 @@ let hasLogo=false,logoV=Date.now();
 function applyBrand(){
   const t=V('ui_title').value.trim()||'MeshCore TAK Gateway',acc=V('accent').value||'#3dd68c',rs=document.documentElement.style;
   $('htitle').textContent=t;document.title=t;rs.setProperty('--acc',acc);rs.setProperty('--acc2',acc);
-  $('hsub').classList.toggle('hide',t==='MeshCore TAK Gateway');
+  $('hname').classList.toggle('hide',t==='MeshCore TAK Gateway');
   const bt=V('banner_text').value.trim();
   $('banner').classList.toggle('hide',!V('banner_on').checked||!bt||bt===t);$('btext').textContent=bt;$('btext').style.color=V('banner_color').value;
   const src='/logo.png?v='+logoV;
