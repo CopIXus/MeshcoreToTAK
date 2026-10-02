@@ -196,6 +196,26 @@ size_t TakCot::buildPresence(char* dest, size_t dest_len, const char* gw_uid, co
   }
   xmlEscape(rooms, rooms_esc, sizeof(rooms_esc));
 
+  // ATAK only sends into a chat room when this contact is an online member of it.
+  // The uid must match the __chat id used by buildChat, which is the room name.
+  char group_xml[400] = "";
+  const char* added[TAK_MAX_CHAT];
+  int n_added = 0;
+  for (int i = 0; i < TAK_MAX_CHAT; i++) {
+    const TakChatChannel& c = prefs.chat[i];
+    if (!c.enabled || !c.secret_len || !c.room[0]) continue;
+    bool dup = false;
+    for (int j = 0; j < n_added; j++) dup = dup || strcasecmp(added[j], c.room) == 0;
+    if (dup) continue;
+    added[n_added++] = c.room;
+    char esc[TAK_ROOM_LEN * 6];
+    xmlEscape(c.room, esc, sizeof(esc));
+    size_t l = strlen(group_xml);
+    snprintf(group_xml + l, sizeof(group_xml) - l, "<group name='%s' uid='%s'/>", esc, esc);
+  }
+  char groups_el[420] = "";
+  if (group_xml[0]) snprintf(groups_el, sizeof(groups_el), "<groups>%s</groups>", group_xml);
+
   int n = snprintf(
       dest, dest_len,
       "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
@@ -203,11 +223,13 @@ size_t TakCot::buildPresence(char* dest, size_t dest_len, const char* gw_uid, co
       "<point %s le='9999999.0'/>"
       "<detail>"
       "<contact callsign='%s' endpoint='*:-1:stcp'/>"
+      "<uid Droid='%s'/>"
       "<__group name='Cyan' role='Team Member'/>"
+      "%s"
       "<remarks>MeshCore chat bridge: %s</remarks>"
       "<takv device='Heltec V3' platform='MeshCore TAK Gateway' os='ESP32' version='" TAK_GW_VERSION "'/>"
       "</detail></event>",
-      gw_uid, t0, t0, t1, pt, call_esc, rooms_esc);
+      gw_uid, t0, t0, t1, pt, call_esc, call_esc, groups_el, rooms_esc);
   if (n < 0 || (size_t)n >= dest_len) return 0;
   return (size_t)n;
 }
