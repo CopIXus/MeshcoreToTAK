@@ -133,6 +133,14 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 .ct{flex:1;min-width:0;word-break:break-word}.ca{flex:none;font-size:.72rem;color:var(--muted)}
 .lg{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .lg img{max-height:64px;max-width:140px;background:#0d131b;border-radius:8px;padding:4px}
+.frow{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px;background:var(--card2)}
+.frow .sw{flex:1;min-width:0}
+.frow .sw b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow button{padding:5px 8px;font-size:.75rem}
+.fdot{flex:none;width:14px;height:14px;border-radius:50%;border:1px solid var(--line)}
+.frow.off{opacity:.55}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--text);padding:16px;max-width:720px;width:92vw;max-height:88vh;overflow:auto}
+dialog::backdrop{background:rgba(6,10,16,.7)}
 </style></head><body><div class=wrap>
 <header><img id=hlogo class=hide alt=""><div class=ht><h1 id=htitle>MeshCore TAK Gateway</h1><small id=hsub><span id=hname class=hide>MeshCore TAK Gateway · </span><span id=hver class=hv></span></small></div><button type=button id=updPill class="pill upill hide" onclick=installUpdate()></button><span class=pill><span id=hdot class=dot></span><span id=hstate>…</span></span></header>
 <div id=banner class=hide><img class=bl alt=""><span id=btext></span><img class=bl alt=""></div>
@@ -151,20 +159,33 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <form id=f autocomplete=off>
 
 <section class="card cl" id=c_map><h2><span class=ti>Map marker (CoT)</span><span class=sum id=s_map></span></h2>
+
+<h3>Which nodes go to TAK</h3>
+<p class=hint style="margin:0 0 8px">Only nodes whose adverts carry a GPS position are considered. A node uses the first enabled filter it matches, top to bottom, and is sent with that filter's icon and color.</p>
+<div id=filtList></div>
+<button type=button class=s id=addFilt style="margin-top:8px">Add filter</button>
+
+<div class=frow style="margin-top:10px">
+<label class=sw><input type=checkbox name=send_unmatched><i></i>Send unmatched MeshCore units</label>
+<button type=button class=s id=editDef>Edit default style</button>
+</div>
+<p class=hint>Units that match no filter use the default style when this is on, and are not sent when it is off.</p>
+<div id=gpsList></div>
+
+<dialog id=cotDlg>
 <div class=pv><div class=pvi id=pvIcon></div>
 <div style="min-width:0"><div class=pvn id=pvName></div><div class=pvt id=pvType></div><div class=hint id=pvMeta></div></div></div>
 
-<h3>Which nodes go to TAK</h3>
-<p class=hint style="margin:0 0 8px">Only nodes whose adverts carry a GPS position are considered. These rules then choose which of them are sent.</p>
+<div id=dlgFilt>
+<h3>Filter</h3>
 <div class=g>
-<label class="sw full"><input type=checkbox name=name_filter><i></i>Only send nodes whose name matches a rule</label>
-<div><label class=l>Starts with</label><input name=filt_prefix maxlength=95 placeholder="tak_, TN-"></div>
-<div><label class=l>Ends with</label><input name=filt_suffix maxlength=95 placeholder="-gps, _T"></div>
-<div><label class=l>Contains</label><input name=filt_contains maxlength=95 placeholder="truck, rover"></div>
-<label class="sw full"><input type=checkbox name=strip_prefix><i></i>Remove the matched start / end text from the callsign</label>
+<div><label class=l>Label</label><input id=f_label maxlength=23 placeholder="Fire"></div>
+<div><label class=l>Match</label><select id=f_mode><option value=0>Starts with</option><option value=1>Ends with</option><option value=2>Contains</option></select></div>
+<div class=full><label class=l>Text</label><input id=f_match maxlength=95 placeholder="TNTAK_FIRE_, FIRE-"></div>
+<label class="sw full"><input type=checkbox id=f_strip><i></i>Remove the matched start / end text from the callsign</label>
 </div>
-<p class=hint>Separate several entries with commas. Case does not matter, and a node is sent if it matches any rule.</p>
-<div id=gpsList></div>
+<p class=hint>Separate several entries with commas. Case does not matter, and a node matches if it fits any of them.</p>
+</div>
 
 <h3>Icon</h3>
 <div class=seg id=mode><button type=button data-m=sym>2525 symbol</button><button type=button data-m=mk>Marker</button><button type=button data-m=cus>Iconset</button></div>
@@ -179,13 +200,16 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 <p class=hint style="margin:0 0 8px">Default iconset — built into ATAK, CloudTAK and TAK Portal, so these look the same everywhere.</p>
 <input id=q2 placeholder="Search icons…" style="margin-bottom:8px">
 <div class=ig id=setgrid></div>
-<label class=l style="margin-top:12px">Iconset path</label><input name=cot_icon maxlength=95 placeholder="iconset-uid/Group/icon.png">
+<label class=l style="margin-top:12px">Iconset path</label><input id=cot_icon maxlength=95 placeholder="iconset-uid/Group/icon.png">
 <p class=hint>Pick above, or paste a path from another iconset (uid:Group/icon also accepted). Other iconsets must be installed on every client.</p></div>
 
 <h3>Color</h3>
-<div class=colr><input type=color id=cp><input name=cot_color id=chex maxlength=7 style="width:96px" placeholder="#RRGGBB"><div class=sws id=sws></div></div>
-<div class=g style="margin-top:10px"><div><label class=l>Opacity <span class=dur id=opv></span></label><input type=range name=cot_opacity min=10 max=100 step=5></div></div>
+<div class=colr><input type=color id=cp><input id=cot_color id=chex maxlength=7 style="width:96px" placeholder="#RRGGBB"><div class=sws id=sws></div></div>
+<div class=g style="margin-top:10px"><div><label class=l>Opacity <span class=dur id=opv></span></label><input type=range id=cot_opacity min=10 max=100 step=5></div></div>
 <p class=hint id=colHint></p>
+
+<div class=row style="margin-top:14px"><button type=button id=dlgOk>Done</button><button type=button class=s id=dlgCancel>Cancel</button></div>
+</dialog>
 
 <h3>Timing</h3>
 <div class=g>
@@ -501,29 +525,103 @@ function setColor(c,user){
   if(user)setDirty(true);buildMk();preview();
 }
 
-/* ---------- preview ---------- */
-/* name rules: same matching as TakNodes::passesFilter / callsignFor on the device */
-function rules(n){return V(n).value.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean)}
-function longest(list,f){let b=0;for(const t of list)if(t.length>b&&f(t))b=t.length;return b}
-function matchLen(name){
-  const l=name.toLowerCase();
-  return {p:longest(rules('filt_prefix'),t=>l.startsWith(t)),s:longest(rules('filt_suffix'),t=>l.endsWith(t)),
-    c:longest(rules('filt_contains'),t=>l.includes(t))};
+/* ---------- unit filters ---------- */
+/* matching mirrors TakNodes::matchFilter / callsignFor on the device */
+const NF=8,MODES=['Starts with','Ends with','Contains'];
+let FL=[],DEF=null,editIdx=-1,editSnap=null;
+function blankStyle(){return {type:'a-f-G-U-U-S-R',how:'h-g-i-g-o',remarks:'',icon:'',color:'#0010EB',opacity:'100',archived:false}}
+function readStyle(p){return {type:p('type'),how:p('how'),remarks:p('remarks'),icon:p('icon'),color:(p('color')||'').toUpperCase(),
+  opacity:p('opacity'),archived:p('archived')==='1'}}
+function fromCfg(cfg){
+  DEF=readStyle(v=>cfg['cot_'+v]);
+  FL=[];
+  for(let i=0;i<NF;i++){const p='f'+i+'_';if(!cfg[p+'match']&&cfg[p+'on']!=='1')continue;
+    FL.push({on:cfg[p+'on']==='1',label:cfg[p+'label']||'',mode:+cfg[p+'mode']||0,match:cfg[p+'match']||'',
+      strip:cfg[p+'strip']==='1',...readStyle(v=>cfg[p+v])})}
 }
-function passes(name){if(!V('name_filter').checked)return true;const m=matchLen(name);return !!(m.p||m.s||m.c)}
+function longest(list,f){let b=0;for(const t of list)if(t.length>b&&f(t))b=t.length;return b}
+function tokens(s){return String(s||'').split(',').map(t=>t.trim().toLowerCase()).filter(Boolean)}
+/* filter index, -1 default, -2 not sent */
+function matchOf(name){
+  const l=name.toLowerCase();
+  for(let i=0;i<FL.length;i++){const f=FL[i];if(!f.on)continue;
+    const hit=longest(tokens(f.match),t=>f.mode===1?l.endsWith(t):f.mode===2?l.includes(t):l.startsWith(t));
+    if(hit)return i}
+  return V('send_unmatched').checked?-1:-2;
+}
 function callsignOf(n){
-  if(!V('strip_prefix').checked)return n;
-  const m=matchLen(n),a=m.p<n.length?m.p:0,b=m.s&&n.length-m.s>a?n.length-m.s:n.length;
-  return n.slice(a,b).trim()||n;
+  const i=matchOf(n);if(i<0||!FL[i].strip||FL[i].mode>1)return n;
+  const l=n.toLowerCase(),k=longest(tokens(FL[i].match),t=>FL[i].mode===1?l.endsWith(t):l.startsWith(t));
+  const r=(FL[i].mode===1?n.slice(0,n.length-k):n.slice(k)).trim();return r||n;
 }
 function callsign(){return callsignOf(sample||'tak_Example')}
+function chipOf(i){return i<0?'default':(FL[i].label||MODES[FL[i].mode]+' '+FL[i].match)}
+function styleLabel(s){
+  if(s.icon){const i=setIdx(s.icon);return (i>=0?IX.set.items[i][1]:normIcon(s.icon))||'iconset'}
+  const p=parseType(s.type);if(p){const f=IX.fn.find(f=>f[0]===p.fn);if(f)return ({f:'Friendly',h:'Hostile',n:'Neutral',u:'Unknown'}[p.a]||'')+' '+f[1]}
+  const mk=MK.find(m=>m[0]===s.type);return mk?mk[1]:(s.type||'(no style)');
+}
+function renderFilters(){
+  const g=lastStatus.gps_nodes||[];
+  $('filtList').innerHTML=FL.map((f,i)=>{const n=g.filter(x=>matchOf(x[0])===i).length;
+    return '<div class="frow'+(f.on?'':' off')+'"><label class=sw><input type=checkbox data-ft=on data-i='+i+(f.on?' checked':'')+'><i></i>'+
+      '<span class=fdot style="background:'+esc(f.color||'#888')+'"></span><b>'+esc(f.label||'Filter '+(i+1))+'</b></label>'+
+      '<span class=hint>'+esc(MODES[f.mode]||'')+' '+esc(f.match||'(no text)')+' · '+esc(styleLabel(f))+(n?' · '+n+' node'+(n>1?'s':''):'')+'</span>'+
+      '<button type=button data-ft=edit data-i='+i+'>Edit</button>'+
+      '<button type=button data-ft=up data-i='+i+(i?'':' disabled')+'>↑</button>'+
+      '<button type=button data-ft=dn data-i='+i+(i<FL.length-1?'':' disabled')+'>↓</button>'+
+      '<button type=button data-ft=del data-i='+i+'>✕</button></div>'}).join('')||
+    '<p class=hint>No filters yet. Every GPS node uses the default style.</p>';
+  $('addFilt').classList.toggle('hide',FL.length>=NF);
+  gpsUi();sums();
+}
+function loadEditor(s){
+  $('cot_type').value=s.type||'';$('cot_how').value=s.how||'';$('cot_remarks').value=s.remarks||'';
+  $('cot_icon').value=s.icon||'';$('cot_archived').checked=!!s.archived;$('cot_opacity').value=s.opacity||'100';
+  setColor(s.color||'#0010EB');detectMode();
+}
+function openStyle(i){
+  editIdx=i;editSnap=JSON.stringify(i<0?DEF:FL[i]);
+  $('dlgFilt').classList.toggle('hide',i<0);
+  const s=i<0?DEF:FL[i];
+  $('f_label').value=s.label||'';$('f_mode').value=String(s.mode||0);$('f_match').value=s.match||'';$('f_strip').checked=!!s.strip;
+  loadEditor(s);$('cotDlg').showModal();
+}
+$('addFilt').onclick=()=>{if(FL.length>=NF)return;
+  FL.push({on:true,label:'',mode:0,match:'',strip:false,...blankStyle()});renderFilters();openStyle(FL.length-1)};
+$('editDef').onclick=()=>openStyle(-1);
+$('filtList').onclick=e=>{
+  const b=e.target.closest('[data-ft]');if(!b)return;
+  const i=+b.dataset.i,a=b.dataset.ft;
+  if(a==='on'){FL[i].on=b.checked;setDirty(true);renderFilters();return}
+  if(a==='del'){if(confirm('Delete the '+(FL[i].label||'filter')+' filter?')){FL.splice(i,1);setDirty(true);renderFilters()}return}
+  if(a==='up'&&i>0)[FL[i-1],FL[i]]=[FL[i],FL[i-1]];
+  if(a==='dn'&&i<FL.length-1)[FL[i+1],FL[i]]=[FL[i],FL[i+1]];
+  if(a==='edit')return openStyle(i);
+  setDirty(true);renderFilters();
+};
+$('dlgOk').onclick=()=>{
+  if(editIdx>=0){const f=FL[editIdx];
+    f.label=$('f_label').value.trim();f.mode=+$('f_mode').value;f.match=$('f_match').value.trim();f.strip=$('f_strip').checked;
+    if(!f.match)return toast('Enter the text this filter matches')}
+  const s=editIdx<0?DEF:FL[editIdx];
+  s.type=$('cot_type').value.trim();s.how=$('cot_how').value.trim();s.remarks=$('cot_remarks').value;
+  s.icon=mode==='cus'?normIcon($('cot_icon').value):'';s.color=$('cot_color').value;s.opacity=$('cot_opacity').value;
+  s.archived=$('cot_archived').checked;
+  editSnap=null;$('cotDlg').close();setDirty(true);renderFilters();
+};
+$('dlgCancel').onclick=()=>{if(editSnap){const s=JSON.parse(editSnap);if(editIdx<0)DEF=s;else FL[editIdx]=s}
+  editSnap=null;$('cotDlg').close();renderFilters()};
+$('cotDlg').addEventListener('cancel',e=>{e.preventDefault();$('dlgCancel').click()});
+
 function gpsUi(){
   const g=lastStatus.gps_nodes||[];
   if(!g.length){$('gpsList').innerHTML='<p class=hint>No GPS nodes heard since the gateway started. They appear here as adverts arrive.</p>';return}
-  const sent=g.filter(x=>passes(x[0])).length;
-  $('gpsList').innerHTML='<div class=gn>'+g.map(([n,ago])=>{const ok=passes(n),c=callsignOf(n);
-    return '<span class='+(ok?'ok':'no')+' title="heard '+esc(dur(ago))+' ago">'+esc(n)+(ok&&c!==n?' → '+esc(c):'')+'</span>'}).join('')+
-    '</div><p class=hint>GPS nodes heard: '+g.length+' · sent with these rules: '+sent+(dirty?' (unsaved)':'')+'</p>';
+  const sent=g.filter(x=>matchOf(x[0])!==-2).length;
+  $('gpsList').innerHTML='<div class=gn>'+g.map(([n,ago])=>{const i=matchOf(n),c=callsignOf(n);
+    return '<span class='+(i===-2?'no':'ok')+' title="heard '+esc(dur(ago))+' ago">'+esc(n)+
+      (i!==-2&&c!==n?' → '+esc(c):'')+' · '+esc(chipOf(i))+'</span>'}).join('')+
+    '</div><p class=hint>GPS nodes heard: '+g.length+' · sent: '+sent+(dirty?' (unsaved)':'')+'</p>';
 }
 function argb(){
   const c=V('cot_color').value,m=/^#([0-9a-f]{6})$/i.exec(c);if(!m)return -1;
@@ -548,7 +646,7 @@ function preview(){
   const mk=MK.find(m=>m[0]===t);if(mk)label=mk[1]+' · '+t;
   if(mode==='cus'){const si=setIdx(V('cot_icon').value);label=(si>=0?IX.set.items[si][1]+' · ':'')+(normIcon(V('cot_icon').value)||'(no path)')}
   $('pvType').textContent=label;
-  $('pvMeta').textContent='Stale '+dur(V('stale_sec').value)+' · re-send '+dur(V('refresh_sec').value)+' · remove '+dur(V('max_age_sec').value)+(V('name_filter').checked?' · name rules on':'');
+  $('pvMeta').textContent='Stale '+dur(V('stale_sec').value)+' · re-send '+dur(V('refresh_sec').value)+' · remove '+dur(V('max_age_sec').value);
   $('opv').textContent=V('cot_opacity').value+'%';
   for(const n of ['stale_sec','refresh_sec','max_age_sec'])$('d_'+n).textContent=dur(V(n).value);
   $('colHint').textContent=mode==='sym'?'2525 symbols keep their affiliation color on most clients; color still applies in CloudTAK labels and lists.':'';
@@ -652,8 +750,8 @@ CARDS.forEach(c=>{
 });
 function sums(){
   const v=n=>V(n).value.trim(),S=(id,t)=>{$('s_'+id).textContent=t;$('s_'+id).title=t};
-  const r=[...rules('filt_prefix').map(t=>t+'…'),...rules('filt_suffix').map(t=>'…'+t),...rules('filt_contains').map(t=>'…'+t+'…')];
-  S('map',$('pvType').textContent.split(' · ')[0]+' · '+(V('name_filter').checked?(r.length?r.join(', '):'no rules set'):'all GPS nodes')+' · stale '+dur(v('stale_sec')));
+  const r=FL.filter(f=>f.on&&f.match).map(f=>f.label||MODES[f.mode]+' '+f.match);
+  S('map',(r.length?r.join(', '):'no filters')+' · '+(V('send_unmatched').checked?'unmatched sent':'unmatched not sent')+' · stale '+dur(v('stale_sec')));
   const lat=v('chat_lat'),lon=v('chat_lon'),hasPos=lat&&lon&&!(+lat===0&&+lon===0);
   S('node',[v('node_name')||'TAK-GW',hasPos?(+lat).toFixed(4)+', '+(+lon).toFixed(4):'no location',
     V('advert_on').checked?'advert every '+v('advert_hours')+' h':'advert off'].join(' · '));
@@ -678,14 +776,20 @@ async function loadForm(){
     hasKey=[0,1,2].map(i=>cfg['ch'+i+'_haskey']==='1');
     for(let i=0;i<3;i++)V('ch'+i+'_key').value='';
     V('setup_password').value='';$('pw2').value='';$('pwWarn').classList.toggle('hide',cfg.pw_default!=='1');
-    syncPreset(false);setColor(cfg.cot_color||'#0010EB');detectMode();chanUi();applyBrand();setDirty(false);
+    fromCfg(cfg);renderFilters();
+    syncPreset(false);chanUi();applyBrand();setDirty(false);
     if(!cfg.tak_host||!cfg.wifi_ssid)$('c_conn').classList.add('open');
   }catch(e){toast('Config load failed: '+e.message)}
 }
 async function save(){
   const o={};
   for(const el of F.elements){if(!el.name)continue;o[el.name]=el.type==='checkbox'?(el.checked?'1':'0'):el.value}
-  o.cot_icon=mode==='cus'?normIcon(o.cot_icon):'';
+  for(const k of ['type','how','remarks','icon','color','opacity','archived'])o['cot_'+k]=DEF[k==='archived'?(DEF[k]?'1':'0'):k];
+  for(let i=0;i<NF;i++){const f=FL[i]||{},p='f'+i+'_';
+    o[p+'on']=f.on?'1':'0';o[p+'label']=f.label||'';o[p+'mode']=String(f.mode||0);o[p+'match']=f.match||'';
+    o[p+'strip']=f.strip?'1':'0';o[p+'archived']=f.archived?'1':'0';
+    for(const k of ['type','how','remarks','icon','color','opacity'])o[p+k]=f[k]||'';
+  }
   if(o.setup_password){
     if(o.setup_password.length<6){openCard($('c_sys'),true);return toast('Web password must be at least 6 characters')}
     if(o.setup_password!==$('pw2').value){openCard($('c_sys'),true);return toast('The two passwords do not match')}
@@ -702,17 +806,23 @@ async function save(){
 }
 F.addEventListener('input',e=>{
   if(e.target.type==='file')return;
-  if(e.target.id==='q')return buildGrid();
-  if(e.target.id==='q2')return buildSet();
-  if(e.target.name==='cot_icon')buildSet();
+  if(e.target.closest('dialog')){
+    if(e.target.id==='q')return buildGrid();
+    if(e.target.id==='q2')return buildSet();
+    if(e.target.id==='cot_icon')buildSet();
+    if(e.target.id==='cot_color')setColor(e.target.value);
+    if(e.target.id==='cot_type')detectMode();
+    return preview();
+  }
   if(/^ch\d_/.test(e.target.name))chanUi();
   if(/^(ui_title|banner_|accent)/.test(e.target.name))applyBrand();
   if(e.target.name==='preset')syncPreset(true);
-  if(e.target.name==='cot_color')setColor(e.target.value);
-  if(e.target.name==='cot_type'){detectMode()}
   markCard(e.target);setDirty(true);preview();
 });
-F.addEventListener('change',e=>{if(e.target.type==='checkbox'||e.target.tagName==='SELECT'){markCard(e.target);setDirty(true);preview();chanUi();applyBrand()}});
+F.addEventListener('change',e=>{
+  if(e.target.closest('dialog'))return preview();
+  if(e.target.type==='checkbox'||e.target.tagName==='SELECT'){markCard(e.target);setDirty(true);preview();chanUi();applyBrand()}
+});
 F.addEventListener('click',e=>{if(e.target.closest('[data-fn],[data-i],[data-t],[data-c],[data-v],[data-m],[data-a]'))markCard(e.target)});
 F.addEventListener('submit',e=>{e.preventDefault();save()});
 $('cp').addEventListener('input',e=>setColor(e.target.value,true));

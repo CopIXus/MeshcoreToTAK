@@ -168,7 +168,9 @@ void TakWeb::setupRoutes() {
         if (index + len < total) return;
 
         TakPrefs& p = g_cfg->prefs;
-        const TakPrefs before = p;
+        // static: TakPrefs is too large for this task's stack once the filters are in it
+        static TakPrefs before;
+        before = p;
         String v;
 
         // Required fields keep their old value when blank; optional ones may be cleared.
@@ -199,9 +201,6 @@ void TakWeb::setupRoutes() {
         }
         setc(p.tak_host, sizeof(p.tak_host), "tak_host", false);
         setc(p.channel_label, sizeof(p.channel_label), "channel_label", true);
-        setc(p.filt_prefix, sizeof(p.filt_prefix), "filt_prefix", true);
-        setc(p.filt_suffix, sizeof(p.filt_suffix), "filt_suffix", true);
-        setc(p.filt_contains, sizeof(p.filt_contains), "filt_contains", true);
         setc(p.cot.type, sizeof(p.cot.type), "cot_type", false);
         setc(p.cot.how, sizeof(p.cot.how), "cot_how", false);
         setc(p.cot.remarks, sizeof(p.cot.remarks), "cot_remarks", true);
@@ -219,9 +218,42 @@ void TakWeb::setupRoutes() {
         setu(p.refresh_sec, "refresh_sec", 10, 65535);
         setu(p.max_age_sec, "max_age_sec", 60, 65535);
         setb(p.enabled, "enabled");
-        setb(p.name_filter, "name_filter");
-        setb(p.strip_prefix, "strip_prefix");
         setb(p.cot.archived, "cot_archived");
+
+        // ---- unit filters ----
+        setb(p.send_unmatched, "send_unmatched");
+        for (int i = 0; i < TAK_MAX_FILTERS; i++) {
+          TakUnitFilter& f = p.filters[i];
+          char k[20];
+          snprintf(k, sizeof(k), "f%d_on", i);
+          setb(f.enabled, k);
+          snprintf(k, sizeof(k), "f%d_label", i);
+          setc(f.label, sizeof(f.label), k, true);
+          snprintf(k, sizeof(k), "f%d_mode", i);
+          if (jsonGet(body, k, v) && v.length()) f.mode = (uint8_t)constrain(v.toInt(), 0, 2);
+          snprintf(k, sizeof(k), "f%d_match", i);
+          setc(f.match, sizeof(f.match), k, true);
+          snprintf(k, sizeof(k), "f%d_strip", i);
+          setb(f.strip, k);
+          snprintf(k, sizeof(k), "f%d_type", i);
+          setc(f.cot.type, sizeof(f.cot.type), k, false);
+          snprintf(k, sizeof(k), "f%d_how", i);
+          setc(f.cot.how, sizeof(f.cot.how), k, false);
+          snprintf(k, sizeof(k), "f%d_remarks", i);
+          setc(f.cot.remarks, sizeof(f.cot.remarks), k, true);
+          snprintf(k, sizeof(k), "f%d_icon", i);
+          setc(f.cot.icon, sizeof(f.cot.icon), k, true);
+          snprintf(k, sizeof(k), "f%d_color", i);
+          if (jsonGet(body, k, v) && v.length() == 7 && v[0] == '#') {
+            strncpy(f.cot.marker_color, v.c_str(), sizeof(f.cot.marker_color) - 1);
+          }
+          snprintf(k, sizeof(k), "f%d_opacity", i);
+          if (jsonGet(body, k, v) && v.length()) {
+            f.cot.marker_opacity = constrain(v.toInt(), 10, 100) / 100.0f;
+          }
+          snprintf(k, sizeof(k), "f%d_archived", i);
+          setb(f.cot.archived, k);
+        }
 
         // ---- customization ----
         setc(p.ui_title, sizeof(p.ui_title), "ui_title", false);
@@ -679,10 +711,7 @@ String TakWeb::configJson() const {
     j += "\"lora_bw\":\"" + String(_cfg->prefs.lora_bw, 1) + "\",";
     j += "\"lora_sf\":\"" + String(_cfg->prefs.lora_sf) + "\",";
     j += "\"lora_cr\":\"" + String(_cfg->prefs.lora_cr) + "\",";
-    j += "\"name_filter\":\"" + String(_cfg->prefs.name_filter ? 1 : 0) + "\",";
-    j += "\"filt_prefix\":\"" + jsonEsc(String(_cfg->prefs.filt_prefix)) + "\",";
-    j += "\"filt_suffix\":\"" + jsonEsc(String(_cfg->prefs.filt_suffix)) + "\",";
-    j += "\"filt_contains\":\"" + jsonEsc(String(_cfg->prefs.filt_contains)) + "\",";
+    j += "\"send_unmatched\":\"" + String(_cfg->prefs.send_unmatched ? 1 : 0) + "\",";
     j += "\"stale_sec\":\"" + String(_cfg->prefs.stale_sec) + "\",";
     j += "\"refresh_sec\":\"" + String(_cfg->prefs.refresh_sec) + "\",";
     j += "\"max_age_sec\":\"" + String(_cfg->prefs.max_age_sec) + "\",";
@@ -695,8 +724,25 @@ String TakWeb::configJson() const {
     float op = _cfg->prefs.cot.marker_opacity;
     if (!(op > 0.0f) || op > 1.0f) op = 1.0f;
     j += "\"cot_opacity\":\"" + String((int)(op * 100.0f + 0.5f)) + "\",";
-    j += "\"strip_prefix\":\"" + String(_cfg->prefs.strip_prefix ? 1 : 0) + "\",";
     const TakPrefs& p = _cfg->prefs;
+    for (int i = 0; i < TAK_MAX_FILTERS; i++) {
+      const TakUnitFilter& f = p.filters[i];
+      String k = "\"f" + String(i) + "_";
+      j += k + "on\":\"" + String(f.enabled ? 1 : 0) + "\",";
+      j += k + "label\":\"" + jsonEsc(String(f.label)) + "\",";
+      j += k + "mode\":\"" + String(f.mode) + "\",";
+      j += k + "match\":\"" + jsonEsc(String(f.match)) + "\",";
+      j += k + "strip\":\"" + String(f.strip ? 1 : 0) + "\",";
+      j += k + "type\":\"" + jsonEsc(String(f.cot.type)) + "\",";
+      j += k + "how\":\"" + jsonEsc(String(f.cot.how)) + "\",";
+      j += k + "remarks\":\"" + jsonEsc(String(f.cot.remarks)) + "\",";
+      j += k + "icon\":\"" + jsonEsc(String(f.cot.icon)) + "\",";
+      j += k + "color\":\"" + jsonEsc(String(f.cot.marker_color)) + "\",";
+      float fop = f.cot.marker_opacity;
+      if (!(fop > 0.0f) || fop > 1.0f) fop = 1.0f;
+      j += k + "opacity\":\"" + String((int)(fop * 100.0f + 0.5f)) + "\",";
+      j += k + "archived\":\"" + String(f.cot.archived ? 1 : 0) + "\",";
+    }
     j += "\"ui_title\":\"" + jsonEsc(String(p.ui_title)) + "\",";
     j += "\"banner_text\":\"" + jsonEsc(String(p.banner_text)) + "\",";
     j += "\"banner_color\":\"" + jsonEsc(String(p.banner_color)) + "\",";

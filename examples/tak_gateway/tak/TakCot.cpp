@@ -81,7 +81,7 @@ int32_t TakCot::colorToArgb(const char* hex_color, float opacity) {
 size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node,
                           const TakPrefs& prefs, time_t now_utc) {
   if (!dest || dest_len < 256) return 0;
-  const TakCotStyle& style = prefs.cot;
+  const TakCotStyle& style = TakNodes::styleFor(TakNodes::matchFilter(node.name, prefs), prefs);
   char t0[32], t1[32], call_esc[80], rem_esc[96], icon_path[TAK_ICON_LEN + 8], usericon[200];
   formatTime(now_utc, t0, sizeof(t0));
   formatTime(now_utc + (time_t)prefs.stale_sec, t1, sizeof(t1));

@@ -6,8 +6,9 @@ This repository is a fork of MeshCore. The gateway lives in [`examples/tak_gatew
 
 ## Features
 
-- **Map markers** — every MeshCore advert that carries a location becomes a CoT marker with one stable uid per node (latest position, not a trail). Optional name-prefix filter (e.g. only `tak_*` nodes), with the prefix optionally stripped from the callsign.
-- **Marker styling** — 2525 symbols, TAK Default iconset icons (render the same in ATAK, CloudTAK and TAK Portal), or spot-map dots with color; stale time, remarks, archive flag, and a live CoT preview.
+- **Map markers** — every MeshCore advert that carries a location becomes a CoT marker with one stable uid per node (latest position, not a trail).
+- **Unit filters** — up to 8 filters, each matching node names by "starts with", "ends with" or "contains" (comma-separated, case-insensitive). The first enabled filter that matches wins, and it sends the node with its own CoT style, so `TNTAK_FIRE_*` can be a red vehicle while `TNTAK_EMS_*` is green. A filter can strip its matched text from the callsign. Nodes matching nothing use a default style, or are dropped entirely when "Send unmatched MeshCore units" is off.
+- **Marker styling** — per filter and for the default: 2525 symbols, TAK Default iconset icons (render the same in ATAK, CloudTAK and TAK Portal), or spot-map dots with color; stale time, remarks, archive flag, and a live CoT preview.
 - **Chat bridge** — up to 3 MeshCore channels (private key or `#hashtag`) mapped to TAK chat rooms, both directions. Optionally mirrors the MeshCore Public channel into a TAK room (listen only). The gateway appears in TAK as a contact that can be messaged directly. The last 3 bridged messages are shown on the page and the OLED.
 - **Mesh advert** — the gateway can flood its own MeshCore advert with a name and location so it shows up in contact lists and on mesh maps, on a schedule or on demand.
 - **Customization** — page title (also shown on the OLED), identification banner, accent color and logo.

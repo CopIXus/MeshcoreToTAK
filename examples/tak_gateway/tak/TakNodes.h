@@ -48,8 +48,11 @@ public:
                                TakNodeRecord* out_expire[], int max_expire, int& n_expire);
 
   static bool hasValidGps(const ContactInfo& c);
+  // filter index, -1 = default style, -2 = not sent (matches no filter and send_unmatched is off)
+  static int matchFilter(const char* name, const TakPrefs& p);
   static bool passesFilter(const char* name, const TakPrefs& p);
-  // name minus the matched prefix / suffix rule when strip_prefix is on
+  static const TakCotStyle& styleFor(int match, const TakPrefs& p);
+  // name minus the matched start / end text when that filter strips it
   static void callsignFor(const char* name, const TakPrefs& p, char* out, size_t out_len);
   static void makeUid(const uint8_t* pub_key, char* dest, size_t dest_len);
 

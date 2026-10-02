@@ -54,11 +54,24 @@ static size_t matchList(const char* list, const char* name, MatchMode mode) {
   return best;
 }
 
+int TakNodes::matchFilter(const char* name, const TakPrefs& p) {
+  if (name && name[0]) {
+    for (int i = 0; i < TAK_MAX_FILTERS; i++) {
+      const TakUnitFilter& f = p.filters[i];
+      if (!f.enabled || !f.match[0]) continue;
+      MatchMode mode = f.mode == 1 ? MatchSuffix : f.mode == 2 ? MatchContains : MatchPrefix;
+      if (matchList(f.match, name, mode)) return i;
+    }
+  }
+  return p.send_unmatched ? -1 : -2;
+}
+
 bool TakNodes::passesFilter(const char* name, const TakPrefs& p) {
-  if (!p.name_filter) return true;
-  if (!name || !name[0]) return false;
-  return matchList(p.filt_prefix, name, MatchPrefix) || matchList(p.filt_suffix, name, MatchSuffix) ||
-         matchList(p.filt_contains, name, MatchContains);
+  return matchFilter(name, p) != -2;
+}
+
+const TakCotStyle& TakNodes::styleFor(int match, const TakPrefs& p) {
+  return match >= 0 && match < TAK_MAX_FILTERS ? p.filters[match].cot : p.cot;
 }
 
 void TakNodes::callsignFor(const char* name, const TakPrefs& p, char* out, size_t out_len) {
@@ -66,11 +79,12 @@ void TakNodes::callsignFor(const char* name, const TakPrefs& p, char* out, size_
   out[0] = 0;
   if (!name) return;
   size_t nlen = strlen(name), from = 0, to = nlen;
-  if (p.strip_prefix) {
-    size_t pl = matchList(p.filt_prefix, name, MatchPrefix);
-    size_t sl = matchList(p.filt_suffix, name, MatchSuffix);
-    if (pl < nlen) from = pl;
-    if (sl && nlen - sl > from) to = nlen - sl;
+  int m = matchFilter(name, p);
+  if (m >= 0 && p.filters[m].strip && p.filters[m].mode < 2) {
+    MatchMode mode = p.filters[m].mode == 1 ? MatchSuffix : MatchPrefix;
+    size_t l = matchList(p.filters[m].match, name, mode);
+    if (mode == MatchPrefix && l < nlen) from = l;
+    else if (mode == MatchSuffix && l) to = nlen - l;
     while (from < to && isspace((unsigned char)name[from])) from++;
     while (to > from && isspace((unsigned char)name[to - 1])) to--;
     if (from >= to) from = 0, to = nlen;  // never strip a name down to nothing

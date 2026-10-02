@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
 
-#define TAK_CONFIG_VERSION 6
+#define TAK_CONFIG_VERSION 7
 #define TAK_MAX_NODES 32
 #define TAK_HOST_LEN 128
 #define TAK_PATH_LEN 160
@@ -35,6 +35,18 @@ struct TakCotStyle {
   char marker_color[16];
   float marker_opacity;
   bool archived;
+};
+
+#define TAK_MAX_FILTERS 8
+#define TAK_FILTER_LABEL_LEN 24
+// match modes: 0 starts with, 1 ends with, 2 contains
+struct TakUnitFilter {
+  bool enabled;
+  uint8_t mode;
+  bool strip;  // drop the matched text from the TAK callsign (starts with / ends with only)
+  char label[TAK_FILTER_LABEL_LEN];
+  char match[TAK_FILTER_LEN];  // comma-separated, case-insensitive; any entry matches
+  TakCotStyle cot;
 };
 
 struct TakPrefs {
@@ -91,20 +103,26 @@ struct TakPrefs {
   bool advert_on;
   uint16_t advert_hours;  // flood advert interval
 
-  // ---- v6: name filter rules (comma-separated, case-insensitive; any match passes) ----
+  // ---- v6: legacy name filter rules; migrated into filters[] on load ----
   char filt_prefix[TAK_FILTER_LEN];    // replaces name_prefix
   char filt_suffix[TAK_FILTER_LEN];
   char filt_contains[TAK_FILTER_LEN];
+
+  // ---- v7: ordered unit filters, each with its own CoT style ----
+  bool send_unmatched;  // nodes matching no filter use cot (the default style)
+  TakUnitFilter filters[TAK_MAX_FILTERS];  // first enabled match wins
 };
 
 #define TAK_PREFS_V2_SIZE offsetof(TakPrefs, strip_prefix)
 #define TAK_PREFS_V4_START offsetof(TakPrefs, ui_title)
 #define TAK_PREFS_V5_START offsetof(TakPrefs, node_name)
 #define TAK_PREFS_V6_START offsetof(TakPrefs, filt_prefix)
+#define TAK_PREFS_V7_START offsetof(TakPrefs, send_unmatched)
 // v3 / v4 / v5 files end with the struct's tail padding
 #define TAK_PREFS_V3_SIZE ((offsetof(TakPrefs, strip_prefix) + 1 + 3) & ~(size_t)3)
 #define TAK_PREFS_V4_SIZE ((TAK_PREFS_V5_START + 3) & ~(size_t)3)
 #define TAK_PREFS_V5_SIZE ((TAK_PREFS_V6_START + 3) & ~(size_t)3)
+#define TAK_PREFS_V6_SIZE ((TAK_PREFS_V7_START + 3) & ~(size_t)3)
 
 class TakConfig {
 public:

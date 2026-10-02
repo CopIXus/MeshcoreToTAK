@@ -46,6 +46,8 @@ void TakConfig::setDefaults() {
   copyStr(prefs.node_name, sizeof(prefs.node_name), "TAK-GW");
   prefs.advert_on = false;
   prefs.advert_hours = 12;
+
+  prefs.send_unmatched = true;  // no filters yet: every GPS node uses the default style
 }
 
 void TakConfig::applyPreset(const char* name) {
@@ -93,16 +95,31 @@ bool TakConfig::load() {
   bool v3 = (n == TAK_PREFS_V3_SIZE && tmp.version == 3);
   bool v4 = (n == TAK_PREFS_V4_SIZE && tmp.version == 4);
   bool v5 = (n == TAK_PREFS_V5_SIZE && tmp.version == 5);
-  if (!current && !v2 && !v3 && !v4 && !v5) {
+  bool v6 = (n == TAK_PREFS_V6_SIZE && tmp.version == 6);
+  if (!current && !v2 && !v3 && !v4 && !v5 && !v6) {
     return false;
   }
   if (v2) tmp.strip_prefix = false;
   if (!current) {
     // default everything the old file lacks (its tail padding overlapped the first new bytes)
-    size_t from = v5 ? TAK_PREFS_V6_START : v4 ? TAK_PREFS_V5_START : TAK_PREFS_V4_START;
+    size_t from = v6 ? TAK_PREFS_V7_START : v5 ? TAK_PREFS_V6_START : v4 ? TAK_PREFS_V5_START : TAK_PREFS_V4_START;
     memcpy((uint8_t*)&tmp + from, (const uint8_t*)&prefs + from, sizeof(tmp) - from);
     tmp.name_prefix[sizeof(tmp.name_prefix) - 1] = 0;
-    copyStr(tmp.filt_prefix, sizeof(tmp.filt_prefix), tmp.name_prefix);
+    if (!v6) copyStr(tmp.filt_prefix, sizeof(tmp.filt_prefix), tmp.name_prefix);
+    // turn the old rule lists into ordered filters that keep the old style
+    tmp.send_unmatched = !tmp.name_filter;
+    const char* lists[3] = {tmp.filt_prefix, tmp.filt_suffix, tmp.filt_contains};
+    const char* labels[3] = {"Starts with", "Ends with", "Contains"};
+    for (int i = 0; i < 3; i++) {
+      if (!lists[i][0]) continue;
+      TakUnitFilter& f = tmp.filters[i];
+      f.enabled = true;
+      f.mode = (uint8_t)i;
+      f.strip = tmp.strip_prefix;
+      copyStr(f.label, sizeof(f.label), labels[i]);
+      copyStr(f.match, sizeof(f.match), lists[i]);
+      f.cot = tmp.cot;
+    }
     tmp.version = TAK_CONFIG_VERSION;
   }
   prefs = tmp;
