@@ -1,6 +1,7 @@
 #include "TrackerBridge.h"
 
 #include <MyMesh.h>
+#include <SPIFFS.h>
 #include <string.h>
 
 #include "TrackerConfig.h"
@@ -12,6 +13,8 @@ static TrackerConfig cfg;
 static uint32_t sequence = 0;
 static uint32_t next_sample_ms = 0;
 static bool announced = false;
+static char line[160];
+static uint8_t line_len = 0;
 
 static bool channelKeyed(const ChannelDetails& ch) {
   for (int i = 0; i < 32; i++) {
@@ -23,9 +26,6 @@ static bool channelKeyed(const ChannelDetails& ch) {
 static int pickChannel(MyMesh& mesh) {
   ChannelDetails ch;
   if (mesh.getChannel(cfg.channel, ch) && channelKeyed(ch)) return cfg.channel;
-  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
-    if (mesh.getChannel(i, ch) && channelKeyed(ch)) return i;
-  }
   return -1;
 }
 
@@ -38,8 +38,272 @@ static int batteryPercent() {
   return pct;
 }
 
+static void saveTrackerFile() {
+  File f = SPIFFS.open("/tracker.cfg", "w", true);
+  if (!f) {
+    Serial.println("could not save tracker settings");
+    return;
+  }
+  f.printf("ch=%u\nrole=%s\n", (unsigned)cfg.channel, cfg.role);
+  f.close();
+}
+
+static void loadTrackerFile() {
+  File f = SPIFFS.open("/tracker.cfg", "r");
+  if (!f) return;
+  char buf[64];
+  int n = f.read((uint8_t*)buf, sizeof(buf) - 1);
+  f.close();
+  if (n <= 0) return;
+  buf[n] = 0;
+  char* role = strstr(buf, "role=");
+  char* slot = strstr(buf, "ch=");
+  if (slot) {
+    int ch = atoi(slot + 3);
+    if (ch >= 0 && ch < MAX_GROUP_CHANNELS) cfg.channel = (uint8_t)ch;
+  }
+  if (role) {
+    role += 5;
+    char tmp[5];
+    int i = 0;
+    while (role[i] && role[i] != '\n' && role[i] != '\r' && i < 4) {
+      char c = role[i];
+      if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+      tmp[i++] = c;
+    }
+    tmp[i] = 0;
+    if (i >= 2) memcpy(cfg.role, tmp, sizeof(cfg.role));
+  }
+}
+
+static void printHelp() {
+  Serial.println("USB console, 115200. Settings are kept on the device.");
+  Serial.println("  status");
+  Serial.println("  name <callsign>");
+  Serial.println("  role <k9|veh|per|fw|ems|cmd>");
+  Serial.println("  channel <slot> <name> <key>");
+  Serial.println("  track <slot>");
+  Serial.println("Key is 32 or 64 hex characters, or base64. Use the same key as the gateway.");
+  Serial.println("A #name with no key uses the MeshCore hashtag channel.");
+}
+
+static void printStatus(MyMesh& mesh) {
+  NodePrefs* prefs = mesh.getNodePrefs();
+  char id[9];
+  trackerIdFromPublicKey(mesh.self_id.pub_key, id);
+  ChannelDetails ch;
+  bool keyed = mesh.getChannel(cfg.channel, ch) && channelKeyed(ch);
+  Serial.printf("uid %s  name %s  role %s\n", id, prefs->node_name, cfg.role);
+  Serial.printf("radio %.3f MHz  SF%d  BW %.1f  CR%d\n", prefs->freq, prefs->sf, prefs->bw, prefs->cr);
+  if (keyed) {
+    Serial.printf("tracker slot %u  %s\n", (unsigned)cfg.channel, ch.name);
+  } else {
+    Serial.printf("tracker slot %u has no key\n", (unsigned)cfg.channel);
+  }
+  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    if (!mesh.getChannel(i, ch) || !channelKeyed(ch)) continue;
+    Serial.printf("  channel %d %s%s\n", i, ch.name, i == cfg.channel ? "  <- tracker" : "");
+  }
+}
+
+static int hexNibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+static int decodeBase64(const char* in, int n, uint8_t* out) {
+  static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  int val = 0;
+  int valb = -8;
+  int len = 0;
+  for (int i = 0; i < n; i++) {
+    char c = in[i];
+    if (c == '=' || c == ' ' || c == '\r' || c == '\n') continue;
+    const char* p = strchr(tbl, c);
+    if (!p) return -1;
+    val = (val << 6) | (int)(p - tbl);
+    valb += 6;
+    if (valb >= 0) {
+      if (len >= 32) return -1;
+      out[len++] = (uint8_t)((val >> valb) & 0xFF);
+      valb -= 8;
+    }
+  }
+  return len;
+}
+
+// 16 or 32 byte key, or 0 if the text is not a key.
+static int parseKey(const char* text, uint8_t out[32]) {
+  memset(out, 0, 32);
+  if (!text || !text[0]) return 0;
+  if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) text += 2;
+  int n = (int)strlen(text);
+  bool hex = (n == 32 || n == 64);
+  for (int i = 0; hex && i < n; i++) {
+    if (hexNibble(text[i]) < 0) hex = false;
+  }
+  if (hex) {
+    for (int i = 0; i < n; i += 2) {
+      out[i / 2] = (uint8_t)((hexNibble(text[i]) << 4) | hexNibble(text[i + 1]));
+    }
+    return n / 2;
+  }
+  int len = decodeBase64(text, n, out);
+  if (len == 16 || len == 32) return len;
+  memset(out, 0, 32);
+  return 0;
+}
+
+static bool roleOk(const char* s) {
+  size_t n = strlen(s);
+  if (n < 2 || n > 4) return false;
+  for (size_t i = 0; i < n; i++) {
+    char c = s[i];
+    bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z');
+    if (!ok) return false;
+  }
+  return true;
+}
+
+static char* nextToken(char*& p) {
+  while (*p == ' ') p++;
+  if (!*p) return nullptr;
+  char* start = p;
+  while (*p && *p != ' ') p++;
+  if (*p) {
+    *p = 0;
+    p++;
+  }
+  return start;
+}
+
+static void handleLine(MyMesh& mesh, char* text) {
+  while (*text == ' ') text++;
+  if (!*text) return;
+
+  if (strcmp(text, "help") == 0 || strcmp(text, "?") == 0) {
+    printHelp();
+    return;
+  }
+  if (strcmp(text, "status") == 0) {
+    printStatus(mesh);
+    return;
+  }
+  if (strncmp(text, "name ", 5) == 0 || strcmp(text, "name") == 0) {
+    char* name = text + (strncmp(text, "name ", 5) == 0 ? 5 : 4);
+    while (*name == ' ') name++;
+    if (!name[0]) {
+      Serial.println("usage: name <callsign>");
+      return;
+    }
+    NodePrefs* prefs = mesh.getNodePrefs();
+    strncpy(prefs->node_name, name, sizeof(prefs->node_name) - 1);
+    prefs->node_name[sizeof(prefs->node_name) - 1] = 0;
+    mesh.savePrefs();
+    Serial.printf("name %s\n", prefs->node_name);
+    if (strlen(prefs->node_name) > 12) {
+      Serial.println("keep the callsign near 12 characters so the fix still fits");
+    }
+    return;
+  }
+  if (strncmp(text, "role ", 5) == 0 || strcmp(text, "role") == 0) {
+    char* role = text + 4;
+    while (*role == ' ') role++;
+    for (char* p = role; *p; p++) {
+      if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+    }
+    if (!roleOk(role)) {
+      Serial.println("role is 2 to 4 letters or digits, such as k9 or veh");
+      return;
+    }
+    memset(cfg.role, 0, sizeof(cfg.role));
+    memcpy(cfg.role, role, strlen(role));
+    saveTrackerFile();
+    Serial.printf("role %s\n", cfg.role);
+    return;
+  }
+  if (strncmp(text, "track ", 6) == 0 || strcmp(text, "track") == 0) {
+    char* arg = text + 5;
+    while (*arg == ' ') arg++;
+    if (!arg[0]) {
+      Serial.println("usage: track <slot>");
+      return;
+    }
+    int slot = atoi(arg);
+    ChannelDetails ch;
+    if (slot < 0 || slot >= MAX_GROUP_CHANNELS || !mesh.getChannel(slot, ch) || !channelKeyed(ch)) {
+      Serial.println("that slot has no key. Use channel <slot> <name> <key>");
+      return;
+    }
+    cfg.channel = (uint8_t)slot;
+    saveTrackerFile();
+    Serial.printf("tracker slot %d %s\n", slot, ch.name);
+    return;
+  }
+  if (strncmp(text, "channel ", 8) == 0) {
+    char* p = text + 8;
+    char* slot_s = nextToken(p);
+    char* name = nextToken(p);
+    while (*p == ' ') p++;
+    if (!slot_s || !name) {
+      Serial.println("usage: channel <slot> <name> <key>");
+      return;
+    }
+    int slot = atoi(slot_s);
+    if (slot < 0 || slot >= MAX_GROUP_CHANNELS) {
+      Serial.printf("slot must be 0 to %d\n", MAX_GROUP_CHANNELS - 1);
+      return;
+    }
+    ChannelDetails ch;
+    memset(&ch, 0, sizeof(ch));
+    strncpy(ch.name, name, sizeof(ch.name) - 1);
+    int key_len = 0;
+    if (p[0]) {
+      key_len = parseKey(p, ch.channel.secret);
+      if (key_len != 16 && key_len != 32) {
+        Serial.println("key must be 32 or 64 hex characters, or base64");
+        return;
+      }
+    } else if (name[0] == '#') {
+      mesh::Utils::sha256(ch.channel.secret, 16, (const uint8_t*)name, (int)strlen(name));
+      key_len = 16;
+    } else {
+      Serial.println("private channel needs a key. Example: channel 1 TNTAK <32 hex chars>");
+      return;
+    }
+    if (key_len == 16) memset(ch.channel.secret + 16, 0, 16);
+    if (!mesh.setChannel(slot, ch)) {
+      Serial.println("could not store that channel");
+      return;
+    }
+    mesh.saveChannels();
+    cfg.channel = (uint8_t)slot;
+    saveTrackerFile();
+    Serial.printf("tracker slot %d %s, %d-byte key saved\n", slot, ch.name, key_len);
+    return;
+  }
+  Serial.println("unknown command. Type help");
+}
+
+static void pollConsole(MyMesh& mesh) {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r' || c == '\n') {
+      if (line_len == 0) continue;
+      line[line_len] = 0;
+      line_len = 0;
+      handleLine(mesh, line);
+    } else if (line_len < sizeof(line) - 1) {
+      line[line_len++] = c;
+    }
+  }
+}
+
 void trackerBridgeBegin(MyMesh& mesh) {
   cfg = trackerDefaults();
+  loadTrackerFile();
   motion.setConfig(cfg.motion);
 
   NodePrefs* prefs = mesh.getNodePrefs();
@@ -56,30 +320,31 @@ void trackerBridgeBegin(MyMesh& mesh) {
     prefs->advert_loc_policy = ADVERT_LOC_NONE;
     changed = true;
   }
+  // Unconfigured companions boot on the EU preset. This gateway uses the US one.
+  // A frequency already saved from the MeshCore app is left as the user set it.
+  if (prefs->freq > 869.0f && prefs->freq < 870.0f && prefs->sf == 8) {
+    prefs->freq = 910.525f;
+    prefs->bw = 62.5f;
+    prefs->sf = 7;
+    prefs->cr = 5;
+    changed = true;
+    Serial.println("radio was the EU default; set to 910.525 MHz SF7");
+  }
   mesh.applyGpsPrefs();
-  if (changed) mesh.savePrefs();
+  if (changed) {
+    mesh.savePrefs();
+    radio_driver.setParams(prefs->freq, prefs->bw, prefs->sf, prefs->cr);
+  }
 
-  char id[9];
-  trackerIdFromPublicKey(mesh.self_id.pub_key, id);
   Serial.println("MeshCoreTracker");
-  Serial.printf("uid %s role %s name %s\n", id, cfg.role, prefs->node_name);
-  Serial.printf("radio %.3f MHz  SF%d  BW %.1f  CR%d\n", prefs->freq, prefs->sf, prefs->bw, prefs->cr);
+  printStatus(mesh);
   Serial.println("advert location off, GPS on");
-
-  bool any = false;
-  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
-    ChannelDetails ch;
-    if (!mesh.getChannel(i, ch) || !channelKeyed(ch)) continue;
-    any = true;
-    Serial.printf("channel %d %s%s\n", i, ch.name, i == pickChannel(mesh) ? "  <- tracker" : "");
-  }
-  if (!any) {
-    Serial.println("no private channel yet. Set one in the MeshCore app, same key as the gateway.");
-  }
-  Serial.println("Bluetooth PIN 123456");
+  printHelp();
 }
 
 void trackerBridgeLoop(MyMesh& mesh) {
+  pollConsole(mesh);
+
   uint32_t now_ms = millis();
   if ((int32_t)(now_ms - next_sample_ms) < 0) return;
   next_sample_ms = now_ms + 1000;
@@ -103,7 +368,8 @@ void trackerBridgeLoop(MyMesh& mesh) {
   int slot = pickChannel(mesh);
   ChannelDetails ch;
   if (slot < 0 || !mesh.getChannel(slot, ch)) {
-    Serial.println("fix ready, no private channel");
+    Serial.printf("fix ready. slot %u has no key. Type: channel %u <name> <key>\n",
+                  (unsigned)cfg.channel, (unsigned)cfg.channel);
     return;
   }
 

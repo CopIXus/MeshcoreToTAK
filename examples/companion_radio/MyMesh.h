@@ -170,6 +170,7 @@ public:
     _prefs.node_lon = sensors.node_lon;
     _store->savePrefs(_prefs);
   }
+  void saveChannels() { _store->saveChannels(this); }
 
 #if ENV_INCLUDE_GPS == 1
   void applyGpsPrefs() {
@@ -205,7 +206,6 @@ private:
   bool isValidClientRepeatFreq(uint32_t f) const;
 
   // helpers, short-cuts
-  void saveChannels() { _store->saveChannels(this); }
   void saveContacts();
 
   DataStore* _store;
