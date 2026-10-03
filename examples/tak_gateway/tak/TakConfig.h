@@ -93,7 +93,7 @@ struct TakPrefs {
   bool public_on;  // MeshCore Public channel -> TAK room (listen only)
   char public_room[TAK_ROOM_LEN];
 
-  char chat_callsign[TAK_CALLSIGN_LEN];  // the gateway's own TAK contact
+  char chat_callsign[TAK_CALLSIGN_LEN];  // unused since chat became one-way; kept for the file layout
   float chat_lat;
   float chat_lon;
   TakChatChannel chat[TAK_MAX_CHAT];
@@ -112,7 +112,7 @@ struct TakPrefs {
   bool send_unmatched;  // nodes matching no filter use cot (the default style)
   TakUnitFilter filters[TAK_MAX_FILTERS];  // first enabled match wins
 
-  // ---- v8: read (ATAK reply) connection uses its own streaming port ----
+  // ---- v8: port of the removed read (TAK -> mesh) link; kept for the file layout ----
   uint16_t rx_port;
 };
 
@@ -141,13 +141,10 @@ public:
   bool hasWifi() const;
   bool hasTakHost() const;
   bool hasClientCerts() const;
-  bool hasRxCerts() const;
 
   const char* caPath() const { return "/tak/ca.pem"; }
   const char* certPath() const { return "/tak/client.pem"; }
   const char* keyPath() const { return "/tak/client.key"; }
-  const char* rxCertPath() const { return "/tak/rx-client.pem"; }
-  const char* rxKeyPath() const { return "/tak/rx-client.key"; }
   const char* logoPath() const { return "/tak/logo.png"; }
 
   bool writeFile(const char* path, const uint8_t* data, size_t len);

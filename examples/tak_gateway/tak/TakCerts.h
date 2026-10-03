@@ -22,11 +22,6 @@ struct Bundle {
 // err is a short human message on failure.
 bool install(TakConfig* cfg, const Bundle& in, String& err);
 
-// Optional second identity. Writes only /tak/rx-client.pem and rx-client.key.
-// Reuses the CA and passphrase already stored for the publish certificate.
-bool installRx(TakConfig* cfg, const String& certPem, const String& keyPem, const char* passphrase, String& err);
-void removeRx(TakConfig* cfg);
-
 // Subject CN and expiry (YYYY-MM-DD, UTC) of the first certificate in pem.
 bool describe(const String& pem, String& cn, String& expires);
 

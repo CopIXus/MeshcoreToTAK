@@ -15,11 +15,6 @@ public:
   // GeoChat (b-t-f) into a named room, same shape RadioTAK / TN SAM use.
   static size_t buildChat(char* dest, size_t dest_len, const char* gw_uid, const char* room,
                           const char* sender, const char* text, float lat, float lon, time_t now_utc);
-
-  // The gateway's own contact, so TAK users can reply and direct-message it.
-  static size_t buildPresence(char* dest, size_t dest_len, const char* gw_uid, const TakPrefs& prefs,
-                              time_t now_utc);
-
   static void xmlEscape(const char* in, char* out, size_t out_len);
   static void formatTime(time_t t, char* buf, size_t len);
 

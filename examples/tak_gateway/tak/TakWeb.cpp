@@ -31,7 +31,6 @@ static const uint32_t WEB_MIN_HEAP = 20000;
 enum : uint32_t {
   DO_WIFI = 1u << 0,
   DO_RECONNECT = 1u << 1,
-  DO_RX_RESET = 1u << 2,
   DO_RADIO = 1u << 3,
   DO_CHAT = 1u << 4,
   DO_ADVERT = 1u << 5,
@@ -42,7 +41,7 @@ static void later(uint32_t what) { __atomic_fetch_or(&g_todo, what, __ATOMIC_SEQ
 
 // Certificate subject / expiry for the status page, re-read after an install or removal.
 static volatile bool g_cert_info_stale = true;
-static String g_cert_cn, g_cert_exp, g_rx_cert_cn, g_rx_cert_exp;
+static String g_cert_cn, g_cert_exp;
 
 // Body callbacks run before middleware, so uploads must check credentials themselves;
 // the middleware then answers 401 once the body has been consumed.
@@ -294,7 +293,6 @@ void TakWeb::setupRoutes() {
         }
 
         setu(p.tak_port, "tak_port", 1, 65535);
-        setu(p.rx_port, "rx_port", 1, 65535);
         setc(p.key_passphrase, sizeof(p.key_passphrase), "key_passphrase", false);
         setu(p.stale_sec, "stale_sec", 10, 65535);
         setu(p.refresh_sec, "refresh_sec", 10, 65535);
@@ -344,7 +342,6 @@ void TakWeb::setupRoutes() {
         if (jsonGet(body, "accent", v) && isHexColor(v)) strcpy(p.accent, v.c_str());
         setb(p.banner_on, "banner_on");
         // ---- chat bridge ----
-        setc(p.chat_callsign, sizeof(p.chat_callsign), "chat_callsign", false);
         if (jsonGet(body, "chat_lat", v)) p.chat_lat = constrain(v.toFloat(), -90.0f, 90.0f);
         if (jsonGet(body, "chat_lon", v)) p.chat_lon = constrain(v.toFloat(), -180.0f, 180.0f);
         setb(p.public_on, "public_on");
@@ -412,19 +409,16 @@ void TakWeb::setupRoutes() {
                             strcmp(before.tak_host, p.tak_host) != 0 ||
                             strcmp(before.wifi_ssid, p.wifi_ssid) != 0 ||
                             strcmp(before.wifi_psk, p.wifi_psk) != 0;
-        bool rx_port_changed = before.rx_port != p.rx_port;
         bool radio_changed = before.lora_freq != p.lora_freq || before.lora_bw != p.lora_bw ||
                              before.lora_sf != p.lora_sf || before.lora_cr != p.lora_cr;
         bool wifi_changed = strcmp(before.wifi_ssid, p.wifi_ssid) != 0 || strcmp(before.wifi_psk, p.wifi_psk) != 0;
         bool chat_changed = memcmp(before.chat, p.chat, sizeof(p.chat)) != 0 ||
-                            strcmp(before.chat_callsign, p.chat_callsign) != 0 ||
                             before.public_on != p.public_on || strcmp(before.public_room, p.public_room) != 0 ||
                             before.chat_lat != p.chat_lat || before.chat_lon != p.chat_lon;
         bool advert_changed = (p.advert_on && !before.advert_on) ||
                               (p.advert_on && (strcmp(before.node_name, p.node_name) != 0 ||
                                                before.chat_lat != p.chat_lat || before.chat_lon != p.chat_lon));
-        later((wifi_changed ? DO_WIFI : 0) | (link_changed ? DO_RECONNECT : 0) | (rx_port_changed ? DO_RX_RESET : 0) |
-              (radio_changed ? DO_RADIO : 0) | (chat_changed ? DO_CHAT : 0) | (advert_changed ? DO_ADVERT : 0) |
+        later((wifi_changed ? DO_WIFI : 0) | (link_changed ? DO_RECONNECT : 0) | (radio_changed ? DO_RADIO : 0) | (chat_changed ? DO_CHAT : 0) | (advert_changed ? DO_ADVERT : 0) |
               DO_RESTYLE);
         if (strcmp(before.setup_password, p.setup_password) != 0) {
           applyPassword(p.setup_password);
@@ -524,41 +518,6 @@ void TakWeb::setupRoutes() {
         if (ok) {
           g_cert_info_stale = true;
           later(DO_RECONNECT);
-        }
-        req->send(ok ? 200 : 400, "text/plain", err);
-      });
-
-  g_server->on("/api/rx-certs/delete", HTTP_POST, [](AsyncWebServerRequest* req) {
-    if (!g_cfg) {
-      req->send(500, "text/plain", "no cfg");
-      return;
-    }
-    TakCerts::removeRx(g_cfg);
-    g_cert_info_stale = true;
-    later(DO_RX_RESET);
-    req->send(200, "text/plain", "Read certificate removed");
-  });
-
-  g_server->on(
-      "/api/rx-certs", HTTP_POST,
-      [](AsyncWebServerRequest* req) {},
-      nullptr,
-      [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
-        if (!authed(req)) return;
-        if (!g_cfg) {
-          req->send(500, "text/plain", "no cfg");
-          return;
-        }
-        static String body;
-        if (index == 0) body = "";
-        for (size_t i = 0; i < len; i++) body += (char)data[i];
-        if (index + len < total) return;
-        String err;
-        bool ok = TakCerts::installRx(g_cfg, jsonField(body, "cert"), jsonField(body, "key"),
-                                      jsonField(body, "key_passphrase").c_str(), err);
-        if (ok) {
-          g_cert_info_stale = true;
-          later(DO_RX_RESET);
         }
         req->send(ok ? 200 : 400, "text/plain", err);
       });
@@ -689,20 +648,13 @@ String TakWeb::statusJson() const {
   j += "\"ntp_epoch\":" + String((unsigned long)time(nullptr)) + ",";
   j += "\"tak_host\":\"" + jsonEsc(String(_cfg ? _cfg->prefs.tak_host : "")) + "\",";
   j += "\"tak_port\":" + String(_cfg ? _cfg->prefs.tak_port : 0) + ",";
-  j += "\"rx_port\":" + String(_cfg ? _cfg->prefs.rx_port : 0) + ",";
   j += "\"certs\":" + String(_cfg && _cfg->hasClientCerts() ? "true" : "false") + ",";
-  j += "\"rx_certs\":" + String(_cfg && _cfg->hasRxCerts() ? "true" : "false") + ",";
   if (_cfg && g_cert_info_stale) {
     g_cert_info_stale = false;
     TakCerts::describe(_cfg->readFile(_cfg->certPath()), g_cert_cn, g_cert_exp);
-    TakCerts::describe(_cfg->readFile(_cfg->rxCertPath()), g_rx_cert_cn, g_rx_cert_exp);
   }
   j += "\"cert_cn\":\"" + jsonEsc(g_cert_cn) + "\",\"cert_exp\":\"" + g_cert_exp + "\",";
-  j += "\"rx_cert_cn\":\"" + jsonEsc(g_rx_cert_cn) + "\",\"rx_cert_exp\":\"" + g_rx_cert_exp + "\",";
   j += String("\"ap\":") + (_ap_active ? "true" : "false") + ",";
-  j += "\"rx_state\":\"" + jsonEsc(String(_client ? _client->rxStateName() : "OFF")) + "\",";
-  j += "\"rx_up\":" + String(_client ? _client->rxUpSeconds() : -1) + ",";
-  j += "\"rx_err\":\"" + jsonEsc(String(_client ? _client->rxError() : "")) + "\",";
   j += "\"heap\":" + String(ESP.getFreeHeap()) + ",";
   if (_cfg) {
     j += "\"preset\":\"" + jsonEsc(String(_cfg->prefs.preset)) + "\",";
@@ -736,20 +688,16 @@ String TakWeb::statusJson() const {
   if (_client) {
     const TakChatStats& c = _client->chat;
     j += "\"chat_m2t\":" + String(c.mesh_to_tak) + ",";
-    j += "\"chat_t2m\":" + String(c.tak_to_mesh) + ",";
     const TakInTrace& in = _client->inbound;
     j += "\"rx_xml\":" + String(in.xml) + ",";
     j += "\"rx_proto\":" + String(in.proto) + ",";
-    j += "\"rx_chat\":" + String(in.chat) + ",";
-    j += "\"rx_drop\":" + String(in.chat_drop) + ",";
     j += "\"rx_type\":\"" + jsonEsc(String(in.type)) + "\",";
     j += "\"rx_note\":\"" + jsonEsc(String(in.note)) + "\",";
     j += "\"chat_recent\":[";
     for (int i = 0; i < c.recent_n; i++) {
       const TakChatMsg& m = c.recent[i];
       if (i) j += ",";
-      j += String("{\"m\":") + (m.from_mesh ? "true" : "false") + ",\"ago\":" + String((millis() - m.ms) / 1000UL) +
-           ",\"t\":\"" + jsonEsc(String(m.text)) + "\"}";
+      j += "{\"ago\":" + String((millis() - m.ms) / 1000UL) + ",\"t\":\"" + jsonEsc(String(m.text)) + "\"}";
     }
     j += "],";
     j += "\"gw_uid\":\"" + String(_client->gatewayUid()) + "\",";
@@ -805,7 +753,6 @@ String TakWeb::configJson() const {
     j += "\"wifi_psk\":\"" + jsonEsc(String(_cfg->prefs.wifi_psk)) + "\",";
     j += "\"tak_host\":\"" + jsonEsc(String(_cfg->prefs.tak_host)) + "\",";
     j += "\"tak_port\":\"" + String(_cfg->prefs.tak_port) + "\",";
-    j += "\"rx_port\":\"" + String(_cfg->prefs.rx_port) + "\",";
     j += "\"channel_label\":\"" + jsonEsc(String(_cfg->prefs.channel_label)) + "\",";
     j += "\"enabled\":\"" + String(_cfg->prefs.enabled ? 1 : 0) + "\",";
     j += "\"preset\":\"" + jsonEsc(String(_cfg->prefs.preset)) + "\",";
@@ -850,7 +797,6 @@ String TakWeb::configJson() const {
     j += "\"banner_color\":\"" + jsonEsc(String(p.banner_color)) + "\",";
     j += "\"accent\":\"" + jsonEsc(String(p.accent)) + "\",";
     j += "\"banner_on\":\"" + String(p.banner_on ? 1 : 0) + "\",";
-    j += "\"chat_callsign\":\"" + jsonEsc(String(p.chat_callsign)) + "\",";
     j += "\"public_on\":\"" + String(p.public_on ? 1 : 0) + "\",";
     j += "\"public_room\":\"" + jsonEsc(String(p.public_room)) + "\",";
     j += "\"chat_lat\":\"" + (p.chat_lat || p.chat_lon ? String(p.chat_lat, 6) : String("")) + "\",";
@@ -951,7 +897,6 @@ void TakWeb::loop() {
     tak_nodes.markAllForResend();  // push the new styling on the next refresh tick
   }
   if ((todo & DO_RECONNECT) && _client) _client->reconnect();
-  else if ((todo & DO_RX_RESET) && _client) _client->forgetReceive();
 
   if (millis() - _last_wifi_check < 2000) return;
   _last_wifi_check = millis();

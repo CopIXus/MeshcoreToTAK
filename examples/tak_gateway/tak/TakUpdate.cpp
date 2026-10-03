@@ -107,7 +107,7 @@ void TakUpdate::taskEntry(void* arg) {
 
 void TakUpdate::freeTakLinks() {
   if (!_client) return;
-  _client->pause(true);  // loop() drops both TAK TLS sessions and frees their heap
+  _client->pause(true);  // loop() drops the TAK TLS session and frees its heap
   for (int i = 0; i < 100 && !_client->idle(); i++) vTaskDelay(pdMS_TO_TICKS(50));
 }
 
@@ -142,7 +142,7 @@ bool TakUpdate::doCheck(String& err) {
     err = "No Wi-Fi";
     return false;
   }
-  // No PSRAM: a third TLS session next to both TAK links exhausts the heap.
+  // No PSRAM: a second TLS session next to the TAK link exhausts the heap.
   freeTakLinks();
   if (ESP.getMaxAllocHeap() < MIN_TLS_BLOCK) {
     err = String("Not enough memory to check (") + ESP.getMaxAllocHeap() + " B free block)";

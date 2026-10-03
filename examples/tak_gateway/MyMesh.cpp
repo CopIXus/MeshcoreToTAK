@@ -95,7 +95,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel& channel, mesh::Packe
     msg = sep + 2;
   }
   Serial.printf("[CHAT] mesh ch%d %s -> TAK room %s: %s\n", ch, sender, _client->roomFor(ch), msg);
-  _client->noteChat(true, ch, sender, msg);
+  _client->noteChat(ch, sender, msg);
   if (_cfg->prefs.enabled && !_client->queueChat(ch, sender, msg)) {
     Serial.println("[CHAT] not sent to TAK (no link / no time yet)");
   }
@@ -175,27 +175,5 @@ void MyMesh::loopGateway() {
   if (_advert_due && _client && _client->nowUtc() && sendSelfAdvert()) {
     _advert_due = false;
     _last_advert_ms = millis();
-  }
-
-  TakChatIn m;
-  if (_client && _client->popChatIn(m)) {
-    ChannelDetails d;
-    if (!getChannel(m.ch, d)) {
-      Serial.printf("[CHAT] no mesh channel slot %u\n", (unsigned)m.ch);
-      return;
-    }
-    uint32_t ts = getRTCClock()->getCurrentTime();
-    // sendGroupMessage cuts "<sender>: <text>" to MAX_TEXT_LEN bytes; cut on a character boundary first
-    int room = MAX_TEXT_LEN - (int)strlen(m.sender) - 2;
-    if (room > 0 && (int)strlen(m.text) > room) {
-      m.text[room] = 0;
-      utf8TrimTail(m.text);
-    }
-    if (sendGroupMessage(ts, d.channel, m.sender, m.text, strlen(m.text))) {
-      _client->noteChat(false, m.ch, m.sender, m.text);
-      Serial.printf("[CHAT] mesh TX ch%d ch#%02x %s: %s\n", m.ch, d.channel.hash[0], m.sender, m.text);
-    } else {
-      Serial.println("[CHAT] mesh send failed (packet pool full)");
-    }
   }
 }

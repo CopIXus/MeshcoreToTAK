@@ -145,48 +145,8 @@ bool install(TakConfig* cfg, const Bundle& in, String& err) {
     return false;
   }
   cfg->save();
-  err = "Write certificate installed - connecting";
+  err = "Certificate installed - connecting";
   return true;
-}
-
-bool installRx(TakConfig* cfg, const String& certPem, const String& keyPem, const char* passphrase, String& err) {
-  err = "";
-  if (!cfg) {
-    err = "no config";
-    return false;
-  }
-  if (!cfg->hasClientCerts()) {
-    err = "Install the write certificate first - the read link uses its CA";
-    return false;
-  }
-  if (passphrase && passphrase[0]) {
-    strncpy(cfg->prefs.key_passphrase, passphrase, sizeof(cfg->prefs.key_passphrase) - 1);
-    cfg->prefs.key_passphrase[sizeof(cfg->prefs.key_passphrase) - 1] = 0;
-    cfg->save();
-  }
-
-  String cert = certPem;
-  String key = keyPem;
-  if (!looksLikePem(cert) || !looksLikePem(key)) {
-    err = "Need the read certificate .pem and .key";
-    return false;
-  }
-  String leaf, chain_ca;
-  splitCertChain(cert, leaf, chain_ca);
-  cert = leaf;
-  if (!preparePrivateKey(key, cfg->prefs.key_passphrase, err)) return false;
-  if (!cfg->writeFile(cfg->rxCertPath(), cert) || !cfg->writeFile(cfg->rxKeyPath(), key)) {
-    err = "SPIFFS write failed";
-    return false;
-  }
-  err = "Read certificate installed";
-  return true;
-}
-
-void removeRx(TakConfig* cfg) {
-  if (!cfg) return;
-  SPIFFS.remove(cfg->rxCertPath());
-  SPIFFS.remove(cfg->rxKeyPath());
 }
 
 bool describe(const String& pem, String& cn, String& expires) {

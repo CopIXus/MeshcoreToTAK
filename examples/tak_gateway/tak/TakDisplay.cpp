@@ -184,8 +184,7 @@ void TakDisplay::drawChat() {
     display.endFrame();
     return;
   }
-  snprintf(line, sizeof(line), "mesh>TAK %lu  TAK>mesh %lu", (unsigned long)_client->chat.mesh_to_tak,
-           (unsigned long)_client->chat.tak_to_mesh);
+  snprintf(line, sizeof(line), "mesh>TAK %lu", (unsigned long)_client->chat.mesh_to_tak);
   display.drawTextEllipsized(0, ROW[0], display.width(), line);
   const char* last = _client->chat.last();
   if (last[0]) {

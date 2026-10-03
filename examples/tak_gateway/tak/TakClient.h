@@ -14,24 +14,15 @@ enum class TakLinkState : uint8_t {
   Error
 };
 
-#define TAK_CHAT_TEXT_LEN 164
-
-struct TakChatIn {
-  uint8_t ch;
-  char sender[TAK_CALLSIGN_LEN];
-  char text[TAK_CHAT_TEXT_LEN];
-};
-
 struct TakChatMsg {
-  bool from_mesh;
   unsigned long ms;
   char text[120];  // "[room] sender: text"
 };
 
+// MeshCore channel messages relayed to TAK. The gateway is one-way.
 struct TakChatStats {
   static const int RECENT = 3;
   uint32_t mesh_to_tak = 0;
-  uint32_t tak_to_mesh = 0;
   TakChatMsg recent[RECENT] = {};  // newest first
   int recent_n = 0;
   unsigned long last_ms = 0;
@@ -40,14 +31,12 @@ struct TakChatStats {
 
 enum class TakEvKind : uint8_t { Other, Point, Delete, Chat };
 
-// What the TAK server actually sent us. chat_t2m only moves after a mesh send.
+// What the TAK server sent on the link: pings, protocol negotiation and group traffic.
 struct TakInTrace {
-  uint32_t xml = 0;        // CoT events in XML
-  uint32_t proto = 0;      // CoT events in TAK protocol protobuf (0xbf frames)
-  uint32_t chat = 0;       // type b-t-f seen
-  uint32_t chat_drop = 0;  // b-t-f not sent to the mesh
-  char type[24] = {0};     // type of the latest event
-  char note[96] = {0};     // latest GeoChat decision
+  uint32_t xml = 0;     // CoT events in XML
+  uint32_t proto = 0;   // CoT events in TAK protocol protobuf (0xbf frames)
+  char type[24] = {0};  // type of the latest event
+  char note[96] = {0};  // latest protocol negotiation step
 };
 
 // Counts are of events actually written to the TAK server, not just queued.
@@ -92,30 +81,6 @@ struct TakInSock {
   }
 };
 
-// Optional second TLS session. It reads GeoChat and does not publish.
-struct TakRxLink {
-  TakInSock in;
-  void* tls;
-  TakLinkState state;
-  char error[96];
-  unsigned long backoff_until;
-  uint32_t backoff_ms;
-  unsigned long next_drain;
-  unsigned long up_since_ms;
-  unsigned long last_presence_ms = 0;
-  bool presence_due = false;
-  uint32_t events = 0;  // CoT events received, logged by type for the first few
-  TakRxLink()
-      : tls(nullptr),
-        state(TakLinkState::Disabled),
-        backoff_until(0),
-        backoff_ms(1000),
-        next_drain(0),
-        up_since_ms(0) {
-    error[0] = 0;
-  }
-};
-
 class TakClient {
 public:
   TakClient();
@@ -123,7 +88,7 @@ public:
   void begin(TakConfig* cfg, TakNodes* nodes);
   void loop();
   void requestConnect();
-  // Drops both links and starts over without backoff. Main task only.
+  // Drops the link and starts over without backoff. Main task only.
   void reconnect();
   const char* reconnectBlocker() const;  // why a reconnect cannot work, or nullptr
   bool queuePoint(const TakNodeRecord& node);
@@ -132,15 +97,12 @@ public:
 
   // MeshCore channel message -> GeoChat in that channel's TAK room
   bool queueChat(int ch, const char* sender, const char* text);
-  // GeoChat from TAK waiting to go out on a MeshCore channel
-  bool popChatIn(TakChatIn& out);
-  void noteChat(bool from_mesh, int ch, const char* sender, const char* text);
+  void noteChat(int ch, const char* sender, const char* text);
   bool chatEnabled() const;
   const char* roomFor(int ch) const;
-  void announce() { _presence_due = true; }
   // Drops the TAK link (from loop()) and keeps it down, e.g. to free heap for a firmware update.
   void pause(bool p) { _paused = p; }
-  bool idle() const { return _tls == nullptr && _rxlink.tls == nullptr; }
+  bool idle() const { return _tls == nullptr; }
   const char* gatewayUid() const { return _gw_uid; }
   TakChatStats chat;
   TakLinkStats link;
@@ -156,10 +118,6 @@ public:
   bool wantsNetwork() const;
   time_t nowUtc() const;
   bool tlsConnected() const { return _tls != nullptr && _state == TakLinkState::Connected; }
-  const char* rxStateName() const;
-  const char* rxError() const { return _rxlink.error; }
-  long rxUpSeconds() const;
-  void forgetReceive();
 
 private:
   TakConfig* _cfg = nullptr;
@@ -178,10 +136,6 @@ private:
 
   // Only held while a handshake is being set up; the CA lives in the esp_tls global store.
   bool _ca_ok = false;
-  static const uint32_t RX_MIN_HEAP_TO_OPEN = 70000;
-  static const uint32_t RX_MIN_BLOCK_TO_OPEN = 24000;
-  static const uint32_t RX_MIN_HEAP_RUNNING = 12000;
-  static const uint32_t RX_LOW_HEAP_BACKOFF_MS = 120000;
   String _ca_pem;
   String _cert_pem;
   String _key_pem;
@@ -194,38 +148,19 @@ private:
   int _q_head = 0, _q_tail = 0, _q_count = 0;
 
   TakInSock _pub;
-  TakRxLink _rxlink;
-  TakInSock* _cur = nullptr;  // socket whose event handleEvent is matching
-  static const int IN_SIZE = 4;
-  TakChatIn _in[IN_SIZE];
-  int _in_head = 0, _in_count = 0;
   char _gw_uid[32] = {0};
   bool _skip_cn = false;  // the server cert did not name "takserver"; check the CA chain only
-  static const int TAK_SEEN_CHAT = 8;
-  uint32_t _seen_chat[TAK_SEEN_CHAT] = {0};  // GeoChat messageId hashes already sent to the mesh
-  int _seen_next = 0;
-  bool _presence_due = false;
-  unsigned long _last_presence_ms = 0;
 
   void processRx(TakInSock& s);
   void rxConsume(TakInSock& s, size_t n);
   void noteType(const char* type, bool proto);
-  void handleEvent(const char* ev, bool proto);
+  void handleEvent(TakInSock& s, const char* ev);
   void onProtoOffer(TakInSock& s, const char* ev);
   void onProtoAnswer(TakInSock& s, const char* ev);
-  int writeCot(const char* xml, size_t len) { return writeCotTo(_tls, _pub, xml, len); }
-  int writeCotTo(void* tls, const TakInSock& s, const char* xml, size_t len);
-  bool rxCarriesPresence() const;
-  void noteLinkEvent(bool receive, const char* type, bool proto);
-  uint32_t _pub_events = 0;
+  int writeCot(const char* xml, size_t len);
   bool sendProtoAsk(void* tls, TakInSock& s, const char* tag);
   bool openSession(void*& slot, const String& cert, const String& key, uint16_t port, const char* tag, char* err,
                    size_t err_len);
-  bool connectRx();
-  void disconnectRx();
-  bool drainRx();
-  void serviceRx();
-  void bumpRx(const char* why);
 
   void setError(const char* msg);
   void setState(TakLinkState s);

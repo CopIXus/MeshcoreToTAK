@@ -1,6 +1,8 @@
 # MeshCore → TAK Gateway
 
-Firmware for a **Heltec WiFi LoRa 32 V3** that listens to a [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh and puts it on a **TAK Server**. Nodes that advertise a GPS position become map markers. MeshCore channel chat is bridged with TAK GeoChat rooms. The gateway connects over TLS with the client certificate from a **TAK Portal Integration**, and everything is set up from a web page on the device.
+Firmware for a **Heltec WiFi LoRa 32 V3** that listens to a [MeshCore](https://github.com/meshcore-dev/MeshCore) mesh and puts it on a **TAK Server**. Nodes that advertise a GPS position become map markers. MeshCore channel chat is posted to TAK GeoChat rooms. The gateway connects over TLS with the client certificate from a **TAK Portal Integration**, and everything is set up from a web page on the device.
+
+**One-way: MeshCore → TAK.** The gateway sends locations and chat from the mesh to the TAK Server. Nothing from TAK goes back onto the mesh: messages sent in ATAK, CloudTAK, or TAK Portal are not transmitted on MeshCore. An earlier build that also carried TAK chat back to the mesh is described in [docs/two-way-chat.md](examples/tak_gateway/docs/two-way-chat.md).
 
 This repository is a fork of MeshCore. The gateway is [`examples/tak_gateway/`](examples/tak_gateway/). The rest of the tree is upstream MeshCore, described in [README.MeshCore.md](README.MeshCore.md).
 
@@ -37,7 +39,7 @@ The heard-GPS list on the setup page shows which filter each live node would use
 
 ## Chat, advert, and the setup page
 
-- **Chat bridge.** Up to 3 MeshCore channels (a private key, or a `#hashtag` name) map to TAK chat rooms, both directions. The MeshCore Public channel can be mirrored into a TAK room as listen-only. The gateway shows up in TAK as its own contact, so users can message it directly. The last few bridged messages appear on the page and on the OLED.
+- **Chat to TAK.** Messages heard on up to 3 MeshCore channels (a private key, or a `#hashtag` name) are posted to TAK chat rooms, and the MeshCore Public channel can be mirrored into a room too. This is one-way: replies typed in TAK stay in TAK. Each message is placed on the map at the gateway location. The last few messages sent appear on the page and on the OLED.
 - **Mesh advert.** The gateway can flood its own MeshCore advert, with a name and a location, on a schedule or on demand, so it appears in contact lists and on mesh maps.
 - **Setup page.** Title, identification banner, accent color, and logo. The same title is shown on the OLED. Sections collapse to a one-line summary.
 - **Updates.** The version is the UTC time the code was finished (`YY.MMDD.HHMM`, shown with a Z). The page reports when GitHub has a newer release, and the device can install it. Settings, keys, and certificates are kept.
@@ -71,18 +73,18 @@ python examples/tak_gateway/tools/build_web_assets.py
 
 ## Versions and updates
 
-The version is the UTC (Zulu) time the code was finished, `YY.MMDD.HHMM`. `26.1002.1349` is 2 Oct 2026, 13:49Z. It is shown on the setup page, the OLED at boot, the serial log, and in the gateway's TAK contact.
+The version is the UTC (Zulu) time the code was finished, `YY.MMDD.HHMM`. `26.1002.1349` is 2 Oct 2026, 13:49Z. It is shown on the setup page, the OLED at boot, and the serial log.
 
 - A build from a clean checkout uses the last commit's time, so it matches that commit's GitHub release. A build with uncommitted changes uses the build time.
 - A push to `main` that touches the gateway publishes a GitHub release (`.github/workflows/tak-gateway-release.yml`) with `tak_gateway_heltec_v3.bin` (over-the-air), `tak_gateway_heltec_v3_full.bin` (USB flash at `0x0`), and `version.txt`.
-- The gateway checks the latest release about a minute after boot, then every 6 hours. **Install update** downloads it, checks it, and restarts. You can also upload a `.bin` under **System → Firmware**.
+- The gateway checks the latest release 10 minutes after boot, then every 6 hours. The TAK link pauses during a check or an install, because the device has no spare memory for a second TLS session. **Install update** downloads it, checks it, and restarts. You can also upload a `.bin` under **System → Firmware**.
 - Downloads are checked against the GitHub root certificates in `tak/TakUpdateRoots.h`. If GitHub changes certificate authority, regenerate that file with `python examples/tak_gateway/tools/make_update_roots.py`.
 
 ## Setup
 
 1. Power the gateway. With no Wi-Fi saved, it opens an access point **`MeshCore-TAK-Setup`** (password `meshcoretak`). Join it and open <http://192.168.4.1>. Sign in as **`admin`** / **`meshcore`**, then set your own password under **System**.
 2. **Connection.** Enter the Wi-Fi network and the TAK Server host and port from the Portal Integration. After Wi-Fi joins, the page is also on the device's LAN address, shown on the OLED.
-3. **Portal certificates.** In TAK Portal, create an Integration, give it a `*_WRITE` group, and download the certs. On the setup page, select the `.pem` and the `.key` and install.
+3. **Portal certificate.** In TAK Portal, create an Integration, give it a `*_WRITE` group, and download the certs. On the setup page, under **Certificate**, select the `.pem` and the `.key` and install. One certificate is all the gateway needs, since it only sends.
    Portal keys are usually encrypted with 3DES (passphrase `atakatak`), which this device cannot decrypt. If the page install fails, install from a PC (it asks for the web password):
 
    ```bash
@@ -94,11 +96,11 @@ The version is the UTC (Zulu) time the code was finished, `YY.MMDD.HHMM`. `26.10
 5. **Map marker.** Add the unit filters, or leave **Send unmatched MeshCore units** on to publish every GPS node with the default style. Save.
 6. Turn on **Send to TAK Server** and save. The status pill turns green when the link is up, and the Portal Integration shows Connected.
 
-Users in the matching `*_READ` group see the markers and the chat.
+Users in the matching `*_READ` group see the markers and the chat. They cannot reply onto the mesh through the gateway.
 
 ### Chat channels
 
-Channel keys are typed on the setup page and stored only on the device. The API never returns them. Paste the 32-hex or base64 secret from the MeshCore app's Share Channel screen, or use a `#hashtag` channel, which needs no key. Each channel maps to a TAK room (the channel name, if you leave the room blank). Messages from TAK go out on the mesh as `callsign: message`.
+Channel keys are typed on the setup page and stored only on the device. The API never returns them. Paste the 32-hex or base64 secret from the MeshCore app's Share Channel screen, or use a `#hashtag` channel, which needs no key. Each channel maps to a TAK room (the channel name, if you leave the room blank). A mesh message `name: text` shows up in the room from `name`. The gateway only listens on these channels; it never transmits chat on the mesh.
 
 ### Trackers
 
@@ -106,8 +108,10 @@ Any MeshCore node that puts its location in adverts will appear: a T-Beam, or a 
 
 ## Device controls
 
-- **Button.** A click cycles the OLED pages. A long press prints the factory-reset hint.
-- **Serial, 115200 baud.** `status` prints the version and link. `fs` lists flash files. `factory_reset` clears Wi-Fi, TAK settings, certificates, and the logo.
+- **Button.** A click cycles the OLED pages. Holding PRG for 3 seconds opens the setup access point **`MeshCore-TAK-Setup`** for 10 minutes, even while the gateway is on Wi-Fi.
+- **Setup access point fallback.** If the gateway cannot join its Wi-Fi network for a minute, it opens the setup access point by itself.
+- **Network watchdog.** If Wi-Fi reports connected but the TAK Server has not been reachable for 3 minutes, the gateway rejoins Wi-Fi. If that does not help within another 3 minutes, it restarts.
+- **Serial, 115200 baud.** `status` prints the version, link state, memory, and Wi-Fi details. `fs` lists flash files. `ap` opens the setup access point. `factory_reset` clears Wi-Fi, TAK settings, certificates, and the logo.
 
 ## Security
 
@@ -124,6 +128,7 @@ Any MeshCore node that puts its location in adverts will appear: a T-Beam, or a 
 | `examples/tak_gateway/web/index.html` | Setup page (embedded as `TakWebAssets.h`) |
 | `images/` | The pictures in this README |
 | `examples/tak_gateway/tools/` | Page assets, version stamp, update root CAs, Portal certificate install |
+| `examples/tak_gateway/docs/` | Design notes, including the removed TAK → mesh chat |
 | `variants/heltec_v3/platformio.ini` | `Heltec_v3_tak_gateway` build environment |
 
 ## Credits and license

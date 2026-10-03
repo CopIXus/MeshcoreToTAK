@@ -13,7 +13,7 @@
 #include "tak/TakUpdate.h"
 #include "tak/TakVersion.h"
 
-// TLS handshakes for both TAK links run on loop(); 8 KB left under 2 KB spare.
+// The TAK TLS handshake runs on loop(); 8 KB left under 2 KB spare.
 SET_LOOP_TASK_STACK_SIZE(12 * 1024);
 
 StdRNG fast_rng;
@@ -29,10 +29,7 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, tak_config, tak_nodes
 
 static void onRadioChanged() { the_mesh.applyRadioFromConfig(); }
 
-void onChatConfigChanged() {
-  the_mesh.applyChannelsFromConfig();
-  tak_client.announce();
-}
+void onChatConfigChanged() { the_mesh.applyChannelsFromConfig(); }
 
 void requestMeshAdvert() { the_mesh.requestAdvert(); }
 

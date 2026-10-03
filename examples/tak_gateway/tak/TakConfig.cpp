@@ -83,6 +83,9 @@ void TakConfig::applyPreset(const char* name) {
 
 bool TakConfig::load() {
   setDefaults();
+  // Read-link certificate from builds that had TAK -> mesh chat.
+  SPIFFS.remove("/tak/rx-client.pem");
+  SPIFFS.remove("/tak/rx-client.key");
   if (!SPIFFS.exists("/tak/config.bin")) {
     // Keep the fixed SoftAP password from setDefaults() ("meshcoretak")
     return false;
@@ -157,8 +160,6 @@ void TakConfig::factoryResetNetworkAndTak() {
   SPIFFS.remove(caPath());
   SPIFFS.remove(certPath());
   SPIFFS.remove(keyPath());
-  SPIFFS.remove(rxCertPath());
-  SPIFFS.remove(rxKeyPath());
   SPIFFS.remove(logoPath());
   setDefaults();
   save();
@@ -174,10 +175,6 @@ bool TakConfig::hasTakHost() const {
 
 bool TakConfig::hasClientCerts() const {
   return SPIFFS.exists(caPath()) && SPIFFS.exists(certPath()) && SPIFFS.exists(keyPath());
-}
-
-bool TakConfig::hasRxCerts() const {
-  return SPIFFS.exists(rxCertPath()) && SPIFFS.exists(rxKeyPath());
 }
 
 bool TakConfig::writeFile(const char* path, const uint8_t* data, size_t len) {
