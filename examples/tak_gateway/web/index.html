@@ -138,6 +138,10 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 .frow button{padding:5px 8px;font-size:.75rem}
 .fdot{flex:none;width:14px;height:14px;border-radius:50%;border:1px solid var(--line)}
 .frow.off{opacity:.55}
+.trkwrap{overflow:auto;margin-top:8px}
+table.trk{width:100%;border-collapse:collapse;font-size:.78rem}
+.trk th,.trk td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;white-space:nowrap}
+.trk th{color:var(--muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.04em}
 dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--text);padding:16px;max-width:720px;width:92vw;max-height:88vh;overflow:auto}
 dialog::backdrop{background:rgba(6,10,16,.7)}
 .bd{font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:999px;background:#223046;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
@@ -245,6 +249,21 @@ button:disabled{opacity:.45;cursor:default}
 </div>
 <p class=hint>Separate several entries with commas. Case does not matter, and a node matches if it fits any of them.</p>
 </div>
+<div id=dlgRole class=hide>
+<h3>Role</h3>
+<div class=g><div><label class=l>Key</label><input id=r_key maxlength=4 placeholder="k9"></div></div>
+<p class=hint>2 to 4 letters or digits. This is the k= field in the tracker message.</p>
+</div>
+<div id=dlgOvr class=hide>
+<h3>Tracker</h3>
+<div class=g>
+<div><label class=l>Id</label><input id=o_uid maxlength=8 placeholder="A1B2C3D4"></div>
+<div><label class=l>Callsign override</label><input id=o_call maxlength=39 placeholder="blank keeps the radio name"></div>
+</div>
+</div>
+<div id=dlgCh class=hide>
+<p class=hint>Used when the role key is not in the catalog.</p>
+</div>
 
 <h3>Icon</h3>
 <div class=seg id=mode><button type=button data-m=sym>2525 symbol</button><button type=button data-m=mk>Marker</button><button type=button data-m=cus>Iconset</button></div>
@@ -303,6 +322,21 @@ button:disabled{opacity:.45;cursor:default}
 <div id=chans></div>
 <p class=hint><b>#name</b> channels need no key. Private channel keys (32 or 64 hex, base64 also accepted) are stored on this device only and are never shown again.</p>
 <p class=hint>Chat messages are placed on the TAK map at the gateway location set under Gateway node.</p>
+</section>
+
+<section class="card cl" id=c_trk><h2><span class=ti>MeshCore trackers</span><span class=sum id=s_trk></span></h2>
+<p class=hint>A tracker radio sends its name, a short role, and the fix on a private channel. This gateway chooses the icon and color. Those messages are not posted as chat. Turn chat off on a channel that should carry fixes only.</p>
+<div id=trkCh></div>
+<h3>Role catalog</h3>
+<p class=hint>The <b>k=</b> value from the radio. A K9, a vehicle, and a person can share one channel and still look different. Unknown roles use the channel style.</p>
+<div id=roleList></div>
+<button type=button class=s id=addRole style="margin-top:8px">Add role</button>
+<h3>Per-tracker overrides</h3>
+<p class=hint>Optional. A row for one 8-character id wins over the role and the channel style. Leave the callsign blank to keep the name from the radio.</p>
+<div id=ovrList></div>
+<button type=button class=s id=addOvr style="margin-top:8px">Add override</button>
+<h3>Heard</h3>
+<div id=trkLive></div>
 </section>
 
 <section class="card cl" id=c_node><h2><span class=ti>Gateway node</span><span class=sum id=s_node></span><small id=advStat></small></h2>
@@ -415,6 +449,7 @@ function setStatus(j){
   if(!!j.logo!==hasLogo){hasLogo=!!j.logo;applyBrand()}
   fwUi(j);
   gpsUi();
+  renderTrkLive();
   const s=(j.last_name&&j.last_name!=='-')?j.last_name:(j.last_advert||'');
   if(s&&s!==sample){sample=s;preview()}
 }
@@ -557,7 +592,9 @@ function setColor(c,user){
 /* ---------- unit filters ---------- */
 /* matching mirrors TakNodes::matchFilter / callsignFor on the device */
 const NF=8,MODES=['Starts with','Ends with','Contains'];
-let FL=[],DEF=null,editIdx=-1,editSnap=null;
+let FL=[],DEF=null,editIdx=-1,editKind='def',editSnap=null,editCall=null;
+const NROLE=8,NOVR=12;
+let ROLES=[],OVRS=[],CHTRK=[];
 function blankStyle(){return {type:'a-f-G-U-U-S-R',how:'h-g-i-g-o',remarks:'',icon:'',color:'#0010EB',opacity:'100',archived:false}}
 function readStyle(p){return {type:p('type'),how:p('how'),remarks:p('remarks'),icon:p('icon'),color:(p('color')||'').toUpperCase(),
   opacity:p('opacity'),archived:p('archived')==='1'}}
@@ -567,6 +604,15 @@ function fromCfg(cfg){
   for(let i=0;i<NF;i++){const p='f'+i+'_';if(!cfg[p+'match']&&cfg[p+'on']!=='1')continue;
     FL.push({on:cfg[p+'on']==='1',label:cfg[p+'label']||'',mode:+cfg[p+'mode']||0,match:cfg[p+'match']||'',
       strip:cfg[p+'strip']==='1',...readStyle(v=>cfg[p+v])})}
+  CHTRK=[];
+  for(let i=0;i<3;i++){const p='ch'+i+'_trk_';
+    CHTRK.push({on:cfg['ch'+i+'_trk']==='1',...readStyle(v=>cfg[p+v])})}
+  ROLES=[];
+  for(let i=0;i<NROLE;i++){const p='role'+i+'_';if(!cfg[p+'key']&&cfg[p+'on']!=='1')continue;
+    ROLES.push({on:cfg[p+'on']!=='0',key:cfg[p+'key']||'',...readStyle(v=>cfg[p+v])})}
+  OVRS=[];
+  for(let i=0;i<NOVR;i++){const p='ovr'+i+'_';if(!cfg[p+'uid'])continue;
+    OVRS.push({uid:(cfg[p+'uid']||'').toUpperCase(),call:cfg[p+'call']||'',...readStyle(v=>cfg[p+v])})}
 }
 function longest(list,f){let b=0;for(const t of list)if(t.length>b&&f(t))b=t.length;return b}
 function tokens(s){return String(s||'').split(',').map(t=>t.trim().toLowerCase()).filter(Boolean)}
@@ -583,7 +629,7 @@ function callsignOf(n){
   const l=n.toLowerCase(),k=longest(tokens(FL[i].match),t=>FL[i].mode===1?l.endsWith(t):l.startsWith(t));
   const r=(FL[i].mode===1?n.slice(0,n.length-k):n.slice(k)).trim();return r||n;
 }
-function callsign(){return callsignOf(sample||'tak_Example')}
+function callsign(){return editCall!=null?editCall:callsignOf(sample||'tak_Example')}
 function chipOf(i){return i<0?'default':(FL[i].label||MODES[FL[i].mode]+' '+FL[i].match)}
 function styleLabel(s){
   if(s.icon){const i=setIdx(s.icon);return (i>=0?IX.set.items[i][1]:normIcon(s.icon))||'iconset'}
@@ -609,18 +655,38 @@ function loadEditor(s){
   $('cot_icon').value=s.icon||'';$('cot_archived').checked=!!s.archived;$('cot_opacity').value=s.opacity||'100';
   setColor(s.color||'#0010EB');detectMode();
 }
-function openStyle(i){
-  if(i<0&&!DEF)DEF=blankStyle();
-  const s=i<0?DEF:FL[i];
+function showDlgBits(kind){
+  $('dlgFilt').classList.toggle('hide',kind!=='filt');
+  $('dlgRole').classList.toggle('hide',kind!=='role');
+  $('dlgOvr').classList.toggle('hide',kind!=='ovr');
+  $('dlgCh').classList.toggle('hide',kind!=='ch');
+}
+function targetStyle(){
+  if(editKind==='def')return DEF;
+  if(editKind==='filt')return FL[editIdx];
+  if(editKind==='role')return ROLES[editIdx];
+  if(editKind==='ovr')return OVRS[editIdx];
+  if(editKind==='ch')return CHTRK[editIdx];
+  return null;
+}
+function openStyle(kind,i){
+  editKind=kind;editIdx=i;
+  if(kind==='def'&&!DEF)DEF=blankStyle();
+  const s=targetStyle();
   if(!s)return;
-  editIdx=i;editSnap=JSON.stringify(s);
-  $('dlgFilt').classList.toggle('hide',i<0);
-  $('f_label').value=s.label||'';$('f_mode').value=String(s.mode||0);$('f_match').value=s.match||'';$('f_strip').checked=!!s.strip;
+  editSnap=JSON.stringify(s);
+  showDlgBits(kind);
+  if(kind==='filt'){
+    $('f_label').value=s.label||'';$('f_mode').value=String(s.mode||0);$('f_match').value=s.match||'';$('f_strip').checked=!!s.strip;
+  }
+  if(kind==='role')$('r_key').value=s.key||'';
+  if(kind==='ovr'){$('o_uid').value=s.uid||'';$('o_call').value=s.call||'';}
+  editCall=kind==='role'?(s.key||'role'):kind==='ovr'?(s.call||s.uid||'tracker'):kind==='ch'?'channel':null;
   loadEditor(s);$('cotDlg').showModal();
 }
 $('addFilt').onclick=()=>{if(FL.length>=NF)return;
-  FL.push({on:true,label:'',mode:0,match:'',strip:false,...blankStyle()});renderFilters();openStyle(FL.length-1)};
-$('editDef').onclick=()=>openStyle(-1);
+  FL.push({on:true,label:'',mode:0,match:'',strip:false,...blankStyle()});renderFilters();openStyle('filt',FL.length-1)};
+$('editDef').onclick=()=>openStyle('def',-1);
 $('filtList').onclick=e=>{
   const b=e.target.closest('[data-ft]');if(!b)return;
   const i=+b.dataset.i,a=b.dataset.ft;
@@ -628,21 +694,35 @@ $('filtList').onclick=e=>{
   if(a==='del'){if(confirm('Delete the '+(FL[i].label||'filter')+' filter?')){FL.splice(i,1);setDirty(true);renderFilters()}return}
   if(a==='up'&&i>0)[FL[i-1],FL[i]]=[FL[i],FL[i-1]];
   if(a==='dn'&&i<FL.length-1)[FL[i+1],FL[i]]=[FL[i],FL[i+1]];
-  if(a==='edit')return openStyle(i);
+  if(a==='edit')return openStyle('filt',i);
   setDirty(true);renderFilters();
 };
 $('dlgOk').onclick=()=>{
-  if(editIdx>=0){const f=FL[editIdx];
+  if(editKind==='filt'){const f=FL[editIdx];
     f.label=$('f_label').value.trim();f.mode=+$('f_mode').value;f.match=$('f_match').value.trim();f.strip=$('f_strip').checked;
     if(!f.match)return toast('Enter the text this filter matches')}
-  const s=editIdx<0?DEF:FL[editIdx];
+  if(editKind==='role'){
+    const key=$('r_key').value.trim().toLowerCase();
+    if(!/^[a-z0-9]{2,4}$/.test(key))return toast('Role key must be 2 to 4 letters or digits');
+    ROLES[editIdx].key=key;ROLES[editIdx].on=true;editCall=key;
+  }
+  if(editKind==='ovr'){
+    const uid=$('o_uid').value.trim().toUpperCase();
+    if(!/^[0-9A-F]{8}$/.test(uid))return toast('Tracker id must be 8 hex characters');
+    OVRS[editIdx].uid=uid;OVRS[editIdx].call=$('o_call').value.trim();
+  }
+  const s=targetStyle();
+  if(!s)return;
   s.type=$('cot_type').value.trim();s.how=$('cot_how').value.trim();s.remarks=$('cot_remarks').value;
   s.icon=mode==='cus'?normIcon($('cot_icon').value):'';s.color=$('cot_color').value;s.opacity=$('cot_opacity').value;
   s.archived=$('cot_archived').checked;
-  editSnap=null;$('cotDlg').close();setDirty(true);renderFilters();
+  editSnap=null;editCall=null;$('cotDlg').close();setDirty(true);renderFilters();renderTrk();
 };
-$('dlgCancel').onclick=()=>{if(editSnap){const s=JSON.parse(editSnap);if(editIdx<0)DEF=s;else FL[editIdx]=s}
-  editSnap=null;$('cotDlg').close();renderFilters()};
+$('dlgCancel').onclick=()=>{
+  if(editSnap){const s=JSON.parse(editSnap);
+    if(editKind==='def')DEF=s;else if(editKind==='filt')FL[editIdx]=s;else if(editKind==='role')ROLES[editIdx]=s;
+    else if(editKind==='ovr')OVRS[editIdx]=s;else if(editKind==='ch')CHTRK[editIdx]=s}
+  editSnap=null;editCall=null;$('cotDlg').close();renderFilters();renderTrk()};
 $('cotDlg').addEventListener('cancel',e=>{e.preventDefault();$('dlgCancel').click()});
 
 function gpsUi(){
@@ -721,6 +801,75 @@ function chanUi(){
   }
 }
 
+/* ---------- trackers ---------- */
+function renderTrk(){
+  $('trkCh').innerHTML=CHTRK.map((c,i)=>{
+    const n=V('ch'+i+'_name').value.trim()||('Channel '+(i+1));
+    return '<div class=chn><div class=chh><label class=sw><input type=checkbox data-tc=on data-i='+i+(c.on?' checked':'')+'><i></i>Accept tracker messages on '+esc(n)+'</label>'+
+      '<button type=button class=s data-tc=edit data-i='+i+'>Channel style</button></div>'+
+      '<p class=hint>'+esc(styleLabel(c))+' · safety net when the role is unknown</p></div>';
+  }).join('');
+  $('roleList').innerHTML=ROLES.map((r,i)=>'<div class="frow'+(r.on?'':' off')+'"><label class=sw><input type=checkbox data-tr=on data-i='+i+(r.on?' checked':'')+'><i></i>'+
+    '<span class=fdot style="background:'+esc(r.color||'#888')+'"></span><b>'+esc(r.key||'role')+'</b></label>'+
+    '<span class=hint>'+esc(styleLabel(r))+'</span><button type=button data-tr=edit data-i='+i+'>Edit</button>'+
+    '<button type=button data-tr=del data-i='+i+'>✕</button></div>').join('')||
+    '<p class=hint>No roles. Trackers fall through to the channel style.</p>';
+  $('addRole').classList.toggle('hide',ROLES.length>=NROLE);
+  $('ovrList').innerHTML=OVRS.map((o,i)=>'<div class=frow><b>'+esc(o.uid||'id')+'</b><span class=hint>'+
+    esc(o.call?o.call+' · ':'')+esc(styleLabel(o))+'</span><button type=button data-to=edit data-i='+i+'>Edit</button>'+
+    '<button type=button data-to=del data-i='+i+'>✕</button></div>').join('')||
+    '<p class=hint>No overrides. Every tracker uses its role, then the channel style.</p>';
+  $('addOvr').classList.toggle('hide',OVRS.length>=NOVR);
+  renderTrkLive();
+}
+function renderTrkLive(){
+  const rows=lastStatus.trackers||[];
+  if(!rows.length){
+    $('trkLive').innerHTML='<p class=hint>No tracker fixes since boot. Heard '+(lastStatus.trk_heard||0)+
+      ' · accepted '+(lastStatus.trk_ok||0)+' · duplicates '+(lastStatus.trk_dup||0)+
+      ' · out of order '+(lastStatus.trk_old||0)+' · bad '+(lastStatus.trk_bad||0)+
+      ' · sent '+(lastStatus.trk_sent||0)+'</p>';
+    return;
+  }
+  const body=rows.map(t=>{
+    const pos=(+t.lat).toFixed(5)+', '+(+t.lon).toFixed(5);
+    const spd=t.spd==null?'':(+t.spd).toFixed(1)+' m/s';
+    const bat=t.bat<0?'':t.bat+'%';
+    return '<tr><td>'+esc(t.call)+'</td><td>'+esc(t.uid)+'</td><td>'+esc(t.k)+'</td><td>'+esc(t.src)+'</td><td>'+
+      (t.ch+1)+'</td><td>'+esc(pos)+'</td><td>'+esc(dur(t.age))+'</td><td>'+esc(spd)+'</td><td>'+esc(bat)+'</td><td>'+
+      t.q+'</td><td>'+t.st+'s</td><td>'+t.rssi+'</td><td>'+t.snr+'</td><td>'+(t.tak_ago==null?'—':esc(dur(t.tak_ago)))+
+      '</td><td>'+esc(t.clk)+'</td></tr>';
+  }).join('');
+  $('trkLive').innerHTML='<div class=trkwrap><table class=trk><tr><th>Callsign</th><th>Id</th><th>Role</th><th>Style</th><th>Ch</th><th>Location</th><th>Age</th><th>Speed</th><th>Batt</th><th>Seq</th><th>Stale</th><th>RSSI</th><th>SNR</th><th>TAK</th><th>Clock</th></tr>'+
+    body+'</table></div><p class=hint>Heard '+(lastStatus.trk_heard||0)+' · accepted '+(lastStatus.trk_ok||0)+
+    ' · duplicates '+(lastStatus.trk_dup||0)+' · out of order '+(lastStatus.trk_old||0)+
+    ' · bad '+(lastStatus.trk_bad||0)+' · sent '+(lastStatus.trk_sent||0)+
+    '. Clock gps means the radio time was used. gw means the gateway clock was used.</p>';
+}
+$('trkCh').onclick=e=>{
+  const b=e.target.closest('[data-tc]');if(!b)return;
+  const i=+b.dataset.i;
+  if(b.dataset.tc==='on'){CHTRK[i].on=b.checked;setDirty(true);sums();return}
+  if(b.dataset.tc==='edit')openStyle('ch',i);
+};
+$('roleList').onclick=e=>{
+  const b=e.target.closest('[data-tr]');if(!b)return;
+  const i=+b.dataset.i,a=b.dataset.tr;
+  if(a==='on'){ROLES[i].on=b.checked;setDirty(true);renderTrk();return}
+  if(a==='del'){ROLES.splice(i,1);setDirty(true);renderTrk();return}
+  if(a==='edit')openStyle('role',i);
+};
+$('ovrList').onclick=e=>{
+  const b=e.target.closest('[data-to]');if(!b)return;
+  const i=+b.dataset.i;
+  if(b.dataset.to==='del'){OVRS.splice(i,1);setDirty(true);renderTrk();return}
+  if(b.dataset.to==='edit')openStyle('ovr',i);
+};
+$('addRole').onclick=()=>{if(ROLES.length>=NROLE)return;
+  ROLES.push({on:true,key:'', ...blankStyle(),how:'m-g',remarks:''});setDirty(true);renderTrk();openStyle('role',ROLES.length-1)};
+$('addOvr').onclick=()=>{if(OVRS.length>=NOVR)return;
+  OVRS.push({uid:'',call:'', ...blankStyle(),how:'m-g',remarks:''});setDirty(true);renderTrk();openStyle('ovr',OVRS.length-1)};
+
 /* ---------- gateway node ---------- */
 V('chat_lat').addEventListener('paste',e=>{
   const m=(e.clipboardData.getData('text')||'').match(/^\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*$/);
@@ -790,6 +939,8 @@ function sums(){
   if(V('public_on').checked)ch.push('Public → '+(v('public_room')||'MeshCore'));
   for(let i=0;i<3;i++){const n=v('ch'+i+'_name');if(n&&V('ch'+i+'_on').checked)ch.push(n+' → '+(v('ch'+i+'_room')||n))}
   S('chat',ch.length?ch.join(' · '):'no channels bridged');
+  const trOn=CHTRK.filter(c=>c.on).length;
+  S('trk',trOn?(trOn+' channel'+(trOn>1?'s':'')+' · '+ROLES.filter(r=>r.on&&r.key).length+' roles'):'tracker off');
   const j=lastStatus;
   S('wifi',(v('wifi_ssid')||'not set')+(j.wifi==='UP'?' · connected '+(j.ip||''):j.wifi?' · not connected':''));
   S('conn',(V('enabled').checked?(v('tak_host')||'no host'):'sending off')+(j.certs?':'+v('tak_port'):' · certificate missing'));
@@ -808,7 +959,7 @@ async function loadForm(){
     hasKey=[0,1,2].map(i=>cfg['ch'+i+'_haskey']==='1');
     for(let i=0;i<3;i++)V('ch'+i+'_key').value='';
     V('setup_password').value='';$('pw2').value='';$('pwWarn').classList.toggle('hide',cfg.pw_default!=='1');
-    fromCfg(cfg);renderFilters();
+    fromCfg(cfg);renderFilters();renderTrk();
     syncPreset(false);chanUi();applyBrand();setDirty(false);
     if(!cfg.wifi_ssid)openCard($('c_wifi'),true);
     if(!cfg.tak_host)openCard($('c_conn'),true);
@@ -824,6 +975,11 @@ async function save(){
     o[p+'strip']=f.strip?'1':'0';o[p+'archived']=f.archived?'1':'0';
     for(const k of ['type','how','remarks','icon','color','opacity'])o[p+k]=f[k]||'';
   }
+  const putStyle=(p,s)=>{o[p+'archived']=s.archived?'1':'0';
+    for(const k of ['type','how','remarks','icon','color','opacity'])o[p+k]=s[k]||''};
+  for(let i=0;i<3;i++){const c=CHTRK[i]||blankStyle();o['ch'+i+'_trk']=c.on?'1':'0';putStyle('ch'+i+'_trk_',c)}
+  for(let i=0;i<NROLE;i++){const r=ROLES[i]||{};o['role'+i+'_on']=r.on?'1':'0';o['role'+i+'_key']=r.key||'';putStyle('role'+i+'_',r)}
+  for(let i=0;i<NOVR;i++){const ov=OVRS[i]||{};o['ovr'+i+'_uid']=ov.uid||'';o['ovr'+i+'_call']=ov.call||'';putStyle('ovr'+i+'_',ov)}
   if(o.setup_password){
     if(o.setup_password.length<6){openCard($('c_sys'),true);return toast('Web password must be at least 6 characters')}
     if(o.setup_password!==$('pw2').value){openCard($('c_sys'),true);return toast('The two passwords do not match')}
@@ -849,7 +1005,7 @@ F.addEventListener('input',e=>{
     if(e.target.id==='cot_type')detectMode();
     return preview();
   }
-  if(/^ch\d_/.test(e.target.name))chanUi();
+  if(/^ch\d_/.test(e.target.name)){chanUi();if(/_name$/.test(e.target.name))renderTrk()}
   if(/^(ui_title|banner_|accent)/.test(e.target.name))applyBrand();
   if(e.target.name==='preset')syncPreset(true);
   markCard(e.target);setDirty(true);preview();

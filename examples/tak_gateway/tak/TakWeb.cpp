@@ -164,6 +164,74 @@ static bool lowHeap(AsyncWebServerRequest* req) {
   return true;
 }
 
+static bool roleKeyOk(const String& v, char* dest, size_t n) {
+  if (v.length() < 2 || v.length() > 4 || v.length() >= n) return false;
+  char tmp[8];
+  for (unsigned i = 0; i < v.length(); i++) {
+    char c = v[i];
+    bool ok = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    if (!ok) return false;
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    tmp[i] = c;
+  }
+  tmp[v.length()] = 0;
+  memcpy(dest, tmp, v.length() + 1);
+  return true;
+}
+
+static bool trackerIdOk(const String& v, char* dest) {
+  if (v.length() != 8) return false;
+  char tmp[9];
+  for (int i = 0; i < 8; i++) {
+    char c = v[i];
+    bool hex = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
+    if (!hex) return false;
+    if (c >= 'a' && c <= 'f') c = (char)(c - 'a' + 'A');
+    tmp[i] = c;
+  }
+  tmp[8] = 0;
+  memcpy(dest, tmp, 9);
+  return true;
+}
+
+static void readStyle(const String& body, const char* prefix, TakCotStyle& s) {
+  String key, v;
+  auto get = [&](const char* suffix, char* dest, size_t n, bool allow_empty) {
+    key = String(prefix) + suffix;
+    if (!jsonGet(body, key.c_str(), v)) return;
+    if (!v.length() && !allow_empty) return;
+    strncpy(dest, v.c_str(), n - 1);
+    dest[n - 1] = 0;
+  };
+  get("type", s.type, sizeof(s.type), false);
+  get("how", s.how, sizeof(s.how), false);
+  get("remarks", s.remarks, sizeof(s.remarks), true);
+  get("icon", s.icon, sizeof(s.icon), true);
+  key = String(prefix) + "color";
+  if (jsonGet(body, key.c_str(), v) && v.length() == 7 && v[0] == '#') {
+    strncpy(s.marker_color, v.c_str(), sizeof(s.marker_color) - 1);
+    s.marker_color[sizeof(s.marker_color) - 1] = 0;
+  }
+  key = String(prefix) + "opacity";
+  if (jsonGet(body, key.c_str(), v) && v.length()) s.marker_opacity = constrain(v.toInt(), 10, 100) / 100.0f;
+  key = String(prefix) + "archived";
+  if (jsonGet(body, key.c_str(), v)) s.archived = v.toInt() != 0;
+}
+
+static String jsonEsc(const String& s);
+
+static void appendStyle(String& j, const char* prefix, const TakCotStyle& s) {
+  float op = s.marker_opacity;
+  if (!(op > 0.0f) || op > 1.0f) op = 1.0f;
+  j += String("\"") + prefix + "type\":\"" + jsonEsc(String(s.type)) + "\",";
+  j += String("\"") + prefix + "how\":\"" + jsonEsc(String(s.how)) + "\",";
+  j += String("\"") + prefix + "remarks\":\"" + jsonEsc(String(s.remarks)) + "\",";
+  j += String("\"") + prefix + "icon\":\"" + jsonEsc(String(s.icon)) + "\",";
+  j += String("\"") + prefix + "color\":\"" + jsonEsc(String(s.marker_color)) + "\",";
+  j += String("\"") + prefix + "opacity\":\"" + String((int)(op * 100.0f + 0.5f)) + "\",";
+  j += String("\"") + prefix + "archived\":\"" + String(s.archived ? 1 : 0) + "\",";
+}
+
 static bool isHexColor(const String& v) {
   if (v.length() != 7 || v[0] != '#') return false;
   for (int i = 1; i < 7; i++) {
@@ -392,6 +460,64 @@ void TakWeb::setupRoutes() {
           setb(c.enabled, k);
           if (c.enabled && !c.secret_len) chat_err += String("\nChannel ") + c.name + ": needs its secret key";
         }
+        String tracker_err;
+        String tracker_probe;
+        if (jsonGet(body, "ch0_trk", tracker_probe) || jsonGet(body, "role0_key", tracker_probe)) {
+          for (int i = 0; i < TAK_MAX_CHAT; i++) {
+            char k[24];
+            snprintf(k, sizeof(k), "ch%d_trk", i);
+            setb(p.tracker_ch[i].enabled, k);
+            snprintf(k, sizeof(k), "ch%d_trk_", i);
+            readStyle(body, k, p.tracker_ch[i].cot);
+            if (p.tracker_ch[i].enabled && !p.chat[i].secret_len) {
+              tracker_err += String("\nChannel ") + (i + 1) + ": tracker messages need the channel name and key";
+            }
+          }
+          for (int i = 0; i < TAK_MAX_ROLES; i++) {
+            char k[24];
+            snprintf(k, sizeof(k), "role%d_key", i);
+            if (!jsonGet(body, k, v)) continue;
+            v.trim();
+            TakRoleStyle& r = p.roles[i];
+            if (!v.length()) {
+              memset(&r, 0, sizeof(r));
+              continue;
+            }
+            if (!roleKeyOk(v, r.key, sizeof(r.key))) {
+              tracker_err += String("\nRole ") + v + ": use 2 to 4 letters or digits";
+              continue;
+            }
+            snprintf(k, sizeof(k), "role%d_on", i);
+            setb(r.enabled, k);
+            snprintf(k, sizeof(k), "role%d_", i);
+            readStyle(body, k, r.cot);
+          }
+          for (int i = 0; i < TAK_MAX_TRACKER_OVR; i++) {
+            char k[24];
+            snprintf(k, sizeof(k), "ovr%d_uid", i);
+            if (!jsonGet(body, k, v)) continue;
+            v.trim();
+            TakTrackerOverride& o = p.tracker_ovr[i];
+            if (!v.length()) {
+              memset(&o, 0, sizeof(o));
+              continue;
+            }
+            if (!trackerIdOk(v, o.uid)) {
+              tracker_err += String("\nOverride ") + v + ": tracker id must be 8 hex characters";
+              memset(&o, 0, sizeof(o));
+              continue;
+            }
+            o.used = true;
+            snprintf(k, sizeof(k), "ovr%d_call", i);
+            if (jsonGet(body, k, v)) {
+              v.trim();
+              strncpy(o.callsign, v.c_str(), sizeof(o.callsign) - 1);
+              o.callsign[sizeof(o.callsign) - 1] = 0;
+            }
+            snprintf(k, sizeof(k), "ovr%d_", i);
+            readStyle(body, k, o.cot);
+          }
+        }
 
         if (jsonGet(body, "preset", v) && v.length()) {
           g_cfg->applyPreset(v.c_str());
@@ -412,9 +538,13 @@ void TakWeb::setupRoutes() {
         bool radio_changed = before.lora_freq != p.lora_freq || before.lora_bw != p.lora_bw ||
                              before.lora_sf != p.lora_sf || before.lora_cr != p.lora_cr;
         bool wifi_changed = strcmp(before.wifi_ssid, p.wifi_ssid) != 0 || strcmp(before.wifi_psk, p.wifi_psk) != 0;
+        bool tracker_listen = false;
+        for (int i = 0; i < TAK_MAX_CHAT; i++) {
+          if (before.tracker_ch[i].enabled != p.tracker_ch[i].enabled) tracker_listen = true;
+        }
         bool chat_changed = memcmp(before.chat, p.chat, sizeof(p.chat)) != 0 ||
                             before.public_on != p.public_on || strcmp(before.public_room, p.public_room) != 0 ||
-                            before.chat_lat != p.chat_lat || before.chat_lon != p.chat_lon;
+                            before.chat_lat != p.chat_lat || before.chat_lon != p.chat_lon || tracker_listen;
         bool advert_changed = (p.advert_on && !before.advert_on) ||
                               (p.advert_on && (strcmp(before.node_name, p.node_name) != 0 ||
                                                before.chat_lat != p.chat_lat || before.chat_lon != p.chat_lon));
@@ -426,7 +556,7 @@ void TakWeb::setupRoutes() {
         }
 
         String msg = link_changed ? "Saved - reconnecting to TAK" : "Saved - markers update within a few seconds";
-        req->send(200, "text/plain", msg + chat_err + pw_err);
+        req->send(200, "text/plain", msg + chat_err + tracker_err + pw_err);
       });
 
   g_server->on("/logo.png", HTTP_GET, [](AsyncWebServerRequest* req) {
@@ -683,6 +813,40 @@ String TakWeb::statusJson() const {
     j += "[\"" + jsonEsc(String(n->name)) + "\"," + String((millis() - n->last_heard_ms) / 1000UL) + "]";
   }
   j += "],";
+  const TakTrackerStats& ts = tak_trackers.stats;
+  j += "\"trk_heard\":" + String(ts.heard) + ",";
+  j += "\"trk_ok\":" + String(ts.accepted) + ",";
+  j += "\"trk_dup\":" + String(ts.duplicates) + ",";
+  j += "\"trk_old\":" + String(ts.out_of_order) + ",";
+  j += "\"trk_bad\":" + String(ts.parse_errors) + ",";
+  j += "\"trk_sent\":" + String(ts.sent) + ",";
+  j += "\"trackers\":[";
+  bool trk_first = true;
+  for (int i = 0; i < tak_trackers.count(); i++) {
+    const TakTrackerRecord* t = tak_trackers.at(i);
+    if (!t || !t->valid) continue;
+    if (!trk_first) j += ",";
+    trk_first = false;
+    uint32_t age = (millis() - t->last_heard_ms) / 1000UL;
+    String tak_ago = t->last_sent_ms ? String((millis() - t->last_sent_ms) / 1000UL) : String("null");
+    j += "{\"call\":\"" + jsonEsc(String(t->callsign)) + "\",";
+    j += "\"uid\":\"" + jsonEsc(String(t->id)) + "\",";
+    j += "\"k\":\"" + jsonEsc(String(t->role)) + "\",";
+    j += "\"src\":\"" + jsonEsc(String(t->style_src)) + "\",";
+    j += "\"ch\":" + String(t->channel) + ",";
+    j += "\"lat\":" + String(t->lat, 6) + ",";
+    j += "\"lon\":" + String(t->lon, 6) + ",";
+    j += "\"spd\":" + String(t->has_speed ? String(t->speed_mps, 1) : String("null")) + ",";
+    j += "\"bat\":" + String(t->battery_pct) + ",";
+    j += "\"q\":" + String(t->sequence) + ",";
+    j += "\"st\":" + String(t->stale_sec) + ",";
+    j += "\"age\":" + String(age) + ",";
+    j += "\"rssi\":" + String(t->rssi, 0) + ",";
+    j += "\"snr\":" + String(t->snr, 1) + ",";
+    j += "\"clk\":\"" + String(t->time_fallback ? "gw" : "gps") + "\",";
+    j += "\"tak_ago\":" + tak_ago + "}";
+  }
+  j += "],";
   j += "\"last_name\":\"" + jsonEsc(last_name) + "\",";
   j += "\"last_ago\":\"" + last_ago + "\",";
   if (_client) {
@@ -812,6 +976,26 @@ String TakWeb::configJson() const {
       j += k + "name\":\"" + jsonEsc(String(c.name)) + "\",";
       j += k + "room\":\"" + jsonEsc(String(c.room)) + "\",";
       j += k + "haskey\":\"" + String(c.secret_len ? 1 : 0) + "\",";  // the key itself is write-only
+      j += "\"ch" + String(i) + "_trk\":\"" + String(p.tracker_ch[i].enabled ? 1 : 0) + "\",";
+      char pref[16];
+      snprintf(pref, sizeof(pref), "ch%d_trk_", i);
+      appendStyle(j, pref, p.tracker_ch[i].cot);
+    }
+    for (int i = 0; i < TAK_MAX_ROLES; i++) {
+      const TakRoleStyle& r = p.roles[i];
+      j += "\"role" + String(i) + "_on\":\"" + String(r.enabled ? 1 : 0) + "\",";
+      j += "\"role" + String(i) + "_key\":\"" + jsonEsc(String(r.key)) + "\",";
+      char pref[16];
+      snprintf(pref, sizeof(pref), "role%d_", i);
+      appendStyle(j, pref, r.cot);
+    }
+    for (int i = 0; i < TAK_MAX_TRACKER_OVR; i++) {
+      const TakTrackerOverride& o = p.tracker_ovr[i];
+      j += "\"ovr" + String(i) + "_uid\":\"" + jsonEsc(String(o.used ? o.uid : "")) + "\",";
+      j += "\"ovr" + String(i) + "_call\":\"" + jsonEsc(String(o.used ? o.callsign : "")) + "\",";
+      char pref[16];
+      snprintf(pref, sizeof(pref), "ovr%d_", i);
+      appendStyle(j, pref, o.cot);
     }
     j += "\"key_passphrase\":\"" + jsonEsc(String(_cfg->prefs.key_passphrase)) + "\"";
   }
@@ -895,6 +1079,7 @@ void TakWeb::loop() {
   if ((todo & DO_RESTYLE) && _client) {
     _client->removeFiltered();     // before markAllForResend clears the sent marks
     tak_nodes.markAllForResend();  // push the new styling on the next refresh tick
+    tak_trackers.markStyleDirty(_client->nowUtc());
   }
   if ((todo & DO_RECONNECT) && _client) _client->reconnect();
 

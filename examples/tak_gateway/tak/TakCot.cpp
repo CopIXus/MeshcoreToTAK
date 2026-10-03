@@ -130,6 +130,74 @@ size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node
   return (size_t)n;
 }
 
+size_t TakCot::buildTrackerPoint(char* dest, size_t dest_len, const char* uid, const char* callsign, double lat,
+                                double lon, bool has_alt, float alt_m, bool has_speed, float speed_mps,
+                                bool has_course, float course_deg, const TakCotStyle& style, time_t cot_time,
+                                uint16_t stale_sec) {
+  if (!dest || dest_len < 256 || !uid || !uid[0] || !cot_time || !stale_sec) return 0;
+  char t0[32], t1[32], call_esc[80], rem_esc[96], icon_path[TAK_ICON_LEN + 8], usericon[200];
+  char type_esc[sizeof(style.type) * 6], how_esc[sizeof(style.how) * 6], track[80];
+  formatTime(cot_time, t0, sizeof(t0));
+  formatTime(cot_time + (time_t)stale_sec, t1, sizeof(t1));
+
+  xmlEscape(callsign ? callsign : "Tracker", call_esc, sizeof(call_esc));
+  xmlEscape(style.remarks, rem_esc, sizeof(rem_esc));
+  xmlEscape(style.type, type_esc, sizeof(type_esc));
+  xmlEscape(style.how[0] ? style.how : "m-g", how_esc, sizeof(how_esc));
+  int32_t color = colorToArgb(style.marker_color, style.marker_opacity);
+
+  usericon[0] = 0;
+  if (style.icon[0]) {
+    iconToPath(style.icon, icon_path, sizeof(icon_path));
+    char icon_esc[TAK_ICON_LEN + 24];
+    xmlEscape(icon_path, icon_esc, sizeof(icon_esc));
+    snprintf(usericon, sizeof(usericon), "<usericon iconsetpath='%s'/>", icon_esc);
+  } else if (strcmp(style.type, "b-m-p-s-m") == 0) {
+    snprintf(usericon, sizeof(usericon), "<usericon iconsetpath='COT_MAPPING_SPOTMAP/b-m-p-s-m/%ld'/>", (long)color);
+  }
+
+  track[0] = 0;
+  if (has_speed || has_course) {
+    char speed_attr[32] = "";
+    char course_attr[32] = "";
+    if (has_speed) snprintf(speed_attr, sizeof(speed_attr), " speed='%.1f'", speed_mps);
+    if (has_course) snprintf(course_attr, sizeof(course_attr), " course='%.1f'", course_deg);
+    snprintf(track, sizeof(track), "<track%s%s/>", speed_attr, course_attr);
+  }
+
+  const char* point = has_alt
+                          ? nullptr
+                          : "<point lat='%.6f' lon='%.6f' hae='9999999.0' ce='9999999.0' le='9999999.0'/>";
+  char point_buf[128];
+  if (has_alt) {
+    snprintf(point_buf, sizeof(point_buf),
+             "<point lat='%.6f' lon='%.6f' hae='%.1f' ce='50.0' le='50.0'/>", lat, lon, alt_m);
+  } else {
+    snprintf(point_buf, sizeof(point_buf), point, lat, lon);
+  }
+
+  int n = snprintf(
+      dest, dest_len,
+      "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+      "<event version='2.0' uid='%s' type='%s' how='%s' time='%s' start='%s' stale='%s'>"
+      "%s"
+      "<detail>"
+      "<contact callsign='%s'/>"
+      "<remarks>%s</remarks>"
+      "%s"
+      "%s"
+      "<color argb='%ld' value='%ld'/>"
+      "%s"
+      "<takv device='MeshCoreTracker' platform='MeshCore TAK Gateway' version='" TAK_GW_VERSION "'/>"
+      "</detail>"
+      "</event>",
+      uid, type_esc, how_esc, t0, t0, t1, point_buf, call_esc, rem_esc, usericon, track, (long)color, (long)color,
+      style.archived ? "<archive/>" : "");
+
+  if (n < 0 || (size_t)n >= dest_len) return 0;
+  return (size_t)n;
+}
+
 size_t TakCot::buildDelete(char* dest, size_t dest_len, const char* uid, time_t now_utc) {
   char t0[32], t1[32];
   formatTime(now_utc, t0, sizeof(t0));

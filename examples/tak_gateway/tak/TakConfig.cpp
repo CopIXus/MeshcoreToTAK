@@ -2,6 +2,7 @@
 #include <string.h>
 
 static_assert(offsetof(TakPrefs, rx_port) == TAK_PREFS_V7_FILE_SIZE, "v7 config file size");
+static_assert(offsetof(TakPrefs, tracker_ch) > offsetof(TakPrefs, rx_port), "v9 tracker config must append");
 
 static void copyStr(char* dest, size_t dest_len, const char* src) {
   if (!dest || dest_len == 0) return;
@@ -51,6 +52,31 @@ void TakConfig::setDefaults() {
   prefs.advert_hours = 12;
 
   prefs.send_unmatched = true;  // no filters yet: every GPS node uses the default style
+
+  // Tracker parsing is off. The role catalog is ready so the first k= fix has a style.
+  auto seedRole = [&](int i, const char* key, const char* type, const char* remarks, const char* color) {
+    TakRoleStyle& r = prefs.roles[i];
+    r.enabled = true;
+    copyStr(r.key, sizeof(r.key), key);
+    copyStr(r.cot.type, sizeof(r.cot.type), type);
+    copyStr(r.cot.how, sizeof(r.cot.how), "m-g");
+    copyStr(r.cot.remarks, sizeof(r.cot.remarks), remarks);
+    copyStr(r.cot.marker_color, sizeof(r.cot.marker_color), color);
+    r.cot.marker_opacity = 1.0f;
+  };
+  seedRole(0, "k9", "a-f-G-U-U-L", "K9", "#0010EB");
+  seedRole(1, "veh", "a-f-G-E-V", "Vehicle", "#F59E0B");
+  seedRole(2, "per", "a-f-G-U-C-I", "Person", "#22C55E");
+  seedRole(3, "fw", "a-f-G-E-V", "Fire", "#EF4444");
+  seedRole(4, "ems", "a-f-G-E-V-U-A", "EMS", "#F97316");
+  seedRole(5, "cmd", "a-f-G-U-H", "Command", "#A855F7");
+  for (int i = 0; i < TAK_MAX_CHAT; i++) {
+    TakChannelTracker& t = prefs.tracker_ch[i];
+    t.enabled = false;
+    t.cot = prefs.cot;
+    copyStr(t.cot.how, sizeof(t.cot.how), "m-g");
+    copyStr(t.cot.remarks, sizeof(t.cot.remarks), "MeshCore tracker");
+  }
 }
 
 void TakConfig::applyPreset(const char* name) {
@@ -104,12 +130,14 @@ bool TakConfig::load() {
   bool v5 = (n == TAK_PREFS_V5_SIZE && tmp.version == 5);
   bool v6 = (n == TAK_PREFS_V6_SIZE && tmp.version == 6);
   bool v7 = (n == TAK_PREFS_V7_FILE_SIZE && tmp.version == 7);
-  if (!current && !v2 && !v3 && !v4 && !v5 && !v6 && !v7) {
+  bool v8 = (n == TAK_PREFS_V8_FILE_SIZE && tmp.version == 8);
+  if (!current && !v2 && !v3 && !v4 && !v5 && !v6 && !v7 && !v8) {
     return false;
   }
   if (v2) tmp.strip_prefix = false;
   if (v7) tmp.rx_port = tmp.tak_port ? tmp.tak_port : 8089;
-  if (!current && !v7) {
+  if (v8) tmp.version = TAK_CONFIG_VERSION;  // tracker fields stay at the defaults copied above
+  if (!current && !v7 && !v8) {
     // default everything the old file lacks (its tail padding overlapped the first new bytes)
     size_t from = v6 ? TAK_PREFS_V7_START : v5 ? TAK_PREFS_V6_START : v4 ? TAK_PREFS_V5_START : TAK_PREFS_V4_START;
     memcpy((uint8_t*)&tmp + from, (const uint8_t*)&prefs + from, sizeof(tmp) - from);

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include "TakConfig.h"
 #include "TakNodes.h"
+#include "TakTrackers.h"
 
 enum class TakLinkState : uint8_t {
   Disabled = 0,
@@ -92,7 +93,10 @@ public:
   void reconnect();
   const char* reconnectBlocker() const;  // why a reconnect cannot work, or nullptr
   bool queuePoint(const TakNodeRecord& node);
+  bool queueTrackerPoint(const TakTrackerRecord& rec, const TakCotStyle& style);
   bool queueDelete(const char* uid);
+  bool hasConfig() const { return _cfg != nullptr; }
+  const TakPrefs& config() const { return _cfg->prefs; }
   void removeFiltered();  // delete map markers for nodes the name filter now rejects
 
   // MeshCore channel message -> GeoChat in that channel's TAK room

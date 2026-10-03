@@ -993,6 +993,15 @@ bool TakClient::queuePoint(const TakNodeRecord& node) {
   return enqueueXml(_tx_buf, n, TakEvKind::Point, node.name);
 }
 
+bool TakClient::queueTrackerPoint(const TakTrackerRecord& rec, const TakCotStyle& style) {
+  if (!_cfg || !_cfg->prefs.enabled || !rec.cot_time) return false;
+  size_t n = TakCot::buildTrackerPoint(_tx_buf, sizeof(_tx_buf), rec.uid, rec.callsign, rec.lat, rec.lon,
+                                       rec.has_altitude, rec.altitude_m, rec.has_speed, rec.speed_mps, rec.has_course,
+                                       rec.course_deg, style, rec.cot_time, rec.stale_sec);
+  if (!n) return false;
+  return enqueueXml(_tx_buf, n, TakEvKind::Point, rec.callsign);
+}
+
 bool TakClient::queuePing() {
   time_t now = nowUtc();
   if (!now) return false;
@@ -1143,6 +1152,7 @@ void TakClient::loop() {
     }
     if ((long)(millis() - _next_refresh) >= 0) {
       processRefreshExpire();
+      tak_trackers.flush(*this);
       _next_refresh = millis() + 1000;
     }
     // Hold CoT while the server decides the protocol. After it accepts, both

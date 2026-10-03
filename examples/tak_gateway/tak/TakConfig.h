@@ -3,7 +3,10 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
 
-#define TAK_CONFIG_VERSION 8
+#define TAK_CONFIG_VERSION 9
+#define TAK_MAX_ROLES 8
+#define TAK_ROLE_KEY_LEN 5
+#define TAK_MAX_TRACKER_OVR 12
 #define TAK_MAX_NODES 32
 #define TAK_HOST_LEN 128
 #define TAK_PATH_LEN 160
@@ -46,6 +49,25 @@ struct TakUnitFilter {
   bool strip;  // drop the matched text from the TAK callsign (starts with / ends with only)
   char label[TAK_FILTER_LABEL_LEN];
   char match[TAK_FILTER_LEN];  // comma-separated, case-insensitive; any entry matches
+  TakCotStyle cot;
+};
+
+// Appended in v9. Kept out of TakChatChannel so older config.bin files still line up.
+struct TakChannelTracker {
+  bool enabled;
+  TakCotStyle cot;
+};
+
+struct TakRoleStyle {
+  bool enabled;
+  char key[TAK_ROLE_KEY_LEN];  // k= value, lowercase, 2-4 chars
+  TakCotStyle cot;
+};
+
+struct TakTrackerOverride {
+  bool used;
+  char uid[9];  // 8 hex chars from the tracker, uppercase
+  char callsign[TAK_CALLSIGN_LEN];  // blank keeps the name from the radio
   TakCotStyle cot;
 };
 
@@ -114,7 +136,15 @@ struct TakPrefs {
 
   // ---- v8: port of the removed read (TAK -> mesh) link; kept for the file layout ----
   uint16_t rx_port;
+
+  // ---- v9: MeshCoreTracker. Parsing stays off until a channel is enabled here. ----
+  TakChannelTracker tracker_ch[TAK_MAX_CHAT];
+  TakRoleStyle roles[TAK_MAX_ROLES];
+  TakTrackerOverride tracker_ovr[TAK_MAX_TRACKER_OVR];
 };
+
+// v8 files are the struct as shipped before tracker_ch (includes trailing padding).
+#define TAK_PREFS_V8_FILE_SIZE offsetof(TakPrefs, tracker_ch)
 
 #define TAK_PREFS_V2_SIZE offsetof(TakPrefs, strip_prefix)
 #define TAK_PREFS_V4_START offsetof(TakPrefs, ui_title)

@@ -2,6 +2,7 @@
 #include <SPIFFS.h>
 #include <helpers/AdvertDataHelpers.h>
 #include "tak/TakText.h"
+#include "tak/TakTrackers.h"
 
 void MyMesh::beginFs() {
   BaseChatMesh::begin();
@@ -51,7 +52,8 @@ void MyMesh::applyChannelsFromConfig() {
     const TakChatChannel& c = _cfg->prefs.chat[i];
     ChannelDetails d;
     memset(&d, 0, sizeof(d));
-    if (c.enabled && (c.secret_len == 16 || c.secret_len == 32)) {
+    bool track = _cfg->prefs.tracker_ch[i].enabled;
+    if ((c.enabled || track) && (c.secret_len == 16 || c.secret_len == 32)) {
       memcpy(d.channel.secret, c.secret, c.secret_len);
       StrHelper::strncpy(d.name, c.name, sizeof(d.name));
       setChannel(i, d);
@@ -79,11 +81,11 @@ void MyMesh::applyChannelsFromConfig() {
 void MyMesh::onChannelMessageRecv(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t timestamp,
                                   const char* text) {
   (void)pkt;
-  (void)timestamp;
   int ch = findChannelIdx(channel);
   if (!_cfg || !_client || ch < 0) return;
-  bool on = ch == TAK_PUBLIC_SLOT ? _cfg->prefs.public_on : (ch < TAK_MAX_CHAT && _cfg->prefs.chat[ch].enabled);
-  if (!on) return;
+  bool chat_on = ch == TAK_PUBLIC_SLOT ? _cfg->prefs.public_on : (ch < TAK_MAX_CHAT && _cfg->prefs.chat[ch].enabled);
+  bool track_on = ch < TAK_MAX_CHAT && _cfg->prefs.tracker_ch[ch].enabled;
+  if (!chat_on && !track_on) return;
 
   // MeshCore group text is "<sender>: <message>"
   char sender[TAK_CALLSIGN_LEN] = "MeshCore";
@@ -94,6 +96,14 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel& channel, mesh::Packe
     sender[sep - text] = 0;
     msg = sep + 2;
   }
+  if (TakTracker::isTrackerMessage(msg)) {
+    if (track_on) {
+      tak_trackers.ingest(_client, _cfg->prefs, ch, sender, msg, timestamp, radio_driver.getLastRSSI(),
+                          radio_driver.getLastSNR());
+      return;
+    }
+  }
+  if (!chat_on) return;
   Serial.printf("[CHAT] mesh ch%d %s -> TAK room %s: %s\n", ch, sender, _client->roomFor(ch), msg);
   _client->noteChat(ch, sender, msg);
   if (_cfg->prefs.enabled && !_client->queueChat(ch, sender, msg)) {
