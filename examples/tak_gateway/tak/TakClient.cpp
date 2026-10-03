@@ -13,6 +13,14 @@
 
 #define TLS ((esp_tls_t*)_tls)
 
+// Encoding an outbound event and decoding an inbound GeoChat both run on the main loop and
+// never nest, so they share these instead of each keeping its own.
+static uint8_t s_detail[2048];
+static uint8_t s_cot[3072];  // outbound CotEvent / inbound GeoChat wrapped as an event
+static uint8_t s_out[2816];  // outbound frame or XML / inbound unescaped detail
+static const size_t Q_ITEM_MAX = 2048;
+static const uint32_t Q_MIN_HEAP = 24000;
+
 TakClient::TakClient() {
   _last_error[0] = 0;
 }
@@ -26,6 +34,10 @@ void TakClient::begin(TakConfig* cfg, TakNodes* nodes) {
   _cfg = cfg;
   _nodes = nodes;
   _last_error[0] = 0;
+  for (char*& q : _q) {
+    free(q);
+    q = nullptr;
+  }
   _q_head = _q_tail = _q_count = 0;
   snprintf(_gw_uid, sizeof(_gw_uid), "meshcore-gw-%012llx", (unsigned long long)(ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL));
   if (_cfg && _cfg->prefs.enabled) setState(TakLinkState::WaitWifi);
@@ -146,6 +158,17 @@ bool TakClient::loadCertPems() {
   Serial.printf("[TAK] certs loaded ca=%u cert=%u key=%u heap=%u time=%ld\n", (unsigned)_ca_pem.length(),
                 (unsigned)_cert_pem.length(), (unsigned)_key_pem.length(), (unsigned)ESP.getFreeHeap(),
                 (long)time(nullptr));
+  // Both links verify against one parsed CA chain instead of a copy each. Replacing the store frees
+  // the old chain, so no session may be open here.
+  disconnectRx();
+  disconnectTls();
+  esp_err_t ce = esp_tls_set_global_ca_store((const unsigned char*)_ca_pem.c_str(), _ca_pem.length() + 1);
+  _ca_pem = String();
+  _ca_ok = ce == ESP_OK;
+  if (!_ca_ok) {
+    setError("CA certificate could not be parsed - re-install the write certificate");
+    return false;
+  }
   return true;
 }
 
@@ -168,7 +191,7 @@ bool TakClient::openSession(void*& slot, const String& cert, const String& key, 
     note("no TAK host");
     return false;
   }
-  if (_ca_pem.isEmpty() || cert.isEmpty() || key.isEmpty()) {
+  if (!_ca_ok || cert.isEmpty() || key.isEmpty()) {
     note("missing certificate");
     return false;
   }
@@ -182,9 +205,9 @@ bool TakClient::openSession(void*& slot, const String& cert, const String& key, 
   }
   esp_tls_t* tls = (esp_tls_t*)slot;
   esp_tls_cfg_t cfg = {};
-  // PEM buffers must include the trailing NUL in the reported size.
-  cfg.cacert_buf = (const unsigned char*)_ca_pem.c_str();
-  cfg.cacert_bytes = _ca_pem.length() + 1;
+  cfg.use_global_ca_store = true;
+  // PEM buffers must include the trailing NUL in the reported size. They are parsed into copies,
+  // so the caller may free them once this returns.
   cfg.clientcert_buf = (const unsigned char*)cert.c_str();
   cfg.clientcert_bytes = cert.length() + 1;
   cfg.clientkey_buf = (const unsigned char*)key.c_str();
@@ -208,10 +231,10 @@ bool TakClient::openSession(void*& slot, const String& cert, const String& key, 
     esp_tls_conn_destroy(tls);
     slot = nullptr;
     // A host that never answered cannot have a name mismatch, and a second timeout stalls the mesh loop.
-    if (_skip_cn || why == ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME || why == ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST ||
-        why == ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT) {
-      return false;
-    }
+    bool unreached = why == ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME || why == ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST ||
+                     why == ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT;
+    if (!unreached) _net_ok_ms = millis();
+    if (_skip_cn || unreached) return false;
     slot = esp_tls_init();
     if (!slot) {
       note("esp_tls_init failed (retry)");
@@ -232,6 +255,7 @@ bool TakClient::openSession(void*& slot, const String& cert, const String& key, 
     _skip_cn = true;
   }
 
+  _net_ok_ms = millis();
   // The handshake used a 20 s socket timeout; a read must never stall the mesh loop that long.
   int fd = -1;
   if (esp_tls_get_conn_sockfd(tls, &fd) == ESP_OK && fd >= 0) {
@@ -255,7 +279,10 @@ bool TakClient::connectTls() {
   if (WiFi.hostByName(_cfg->prefs.tak_host, ip)) {
     Serial.printf("[TAK] DNS %s -> %s\n", _cfg->prefs.tak_host, ip.toString().c_str());
   }
-  if (!openSession(_tls, _cert_pem, _key_pem, _cfg->prefs.tak_port, "publish", nullptr, 0)) {
+  bool opened = openSession(_tls, _cert_pem, _key_pem, _cfg->prefs.tak_port, "publish", nullptr, 0);
+  _cert_pem = String();
+  _key_pem = String();
+  if (!opened) {
     disconnectTls();
     return false;
   }
@@ -305,8 +332,8 @@ void TakClient::disconnectRx() {
     esp_tls_conn_destroy((esp_tls_t*)_rxlink.tls);
     _rxlink.tls = nullptr;
   }
-  _rxlink.cert = "";
-  _rxlink.key = "";
+  if (_rxlink.last_presence_ms) _presence_due = true;  // hand our uid back to the write link
+  _rxlink.last_presence_ms = 0;
   if (_rxlink.state == TakLinkState::Connected) _rxlink.state = TakLinkState::Disabled;
 }
 
@@ -327,8 +354,14 @@ void TakClient::bumpRx(const char* why) {
 }
 
 bool TakClient::connectRx() {
-  if (!_cfg || !_cfg->hasRxCerts() || _ca_pem.isEmpty()) {
+  if (!_cfg || !_cfg->hasRxCerts() || !_ca_ok) {
     strncpy(_rxlink.error, "receive certificate not ready", sizeof(_rxlink.error) - 1);
+    return false;
+  }
+  // Each TLS session pins ~45 KB here; Wi-Fi wedges if the heap runs dry, so the optional link yields.
+  if (ESP.getFreeHeap() < RX_MIN_HEAP_TO_OPEN || ESP.getMaxAllocHeap() < RX_MIN_BLOCK_TO_OPEN) {
+    snprintf(_rxlink.error, sizeof(_rxlink.error), "waiting for memory (%u B free)", (unsigned)ESP.getFreeHeap());
+    _rxlink.backoff_ms = RX_LOW_HEAP_BACKOFF_MS;
     return false;
   }
   String cert = _cfg->readFile(_cfg->rxCertPath());
@@ -339,12 +372,7 @@ bool TakClient::connectRx() {
     _rxlink.error[sizeof(_rxlink.error) - 1] = 0;
     return false;
   }
-  _rxlink.cert = cert;
-  _rxlink.key = key;
-  if (!openSession(_rxlink.tls, _rxlink.cert, _rxlink.key, _cfg->prefs.rx_port, "receive", _rxlink.error,
-                   sizeof(_rxlink.error))) {
-    _rxlink.cert = "";
-    _rxlink.key = "";
+  if (!openSession(_rxlink.tls, cert, key, _cfg->prefs.rx_port, "receive", _rxlink.error, sizeof(_rxlink.error))) {
     return false;
   }
   _rxlink.in.clear();
@@ -352,6 +380,9 @@ bool TakClient::connectRx() {
   _rxlink.backoff_ms = 1000;
   _rxlink.up_since_ms = millis();
   _rxlink.next_drain = millis();
+  _rxlink.presence_due = true;
+  _rxlink.last_presence_ms = 0;
+  _rxlink.events = 0;
   _rxlink.state = TakLinkState::Connected;
   Serial.println("[TAK] receive connected");
   return true;
@@ -427,7 +458,12 @@ void TakClient::serviceRx() {
     if (!connectRx()) bumpRx(_rxlink.error[0] ? _rxlink.error : "receive handshake failed");
     return;
   }
-  if (millis() >= _rxlink.next_drain) {
+  if (ESP.getFreeHeap() < RX_MIN_HEAP_RUNNING) {
+    _rxlink.backoff_ms = RX_LOW_HEAP_BACKOFF_MS;
+    bumpRx("dropped to free memory");
+    return;
+  }
+  if ((long)(millis() - _rxlink.next_drain) >= 0) {
     _rxlink.next_drain = millis() + 50;
     if (!drainRx()) {
       char msg[96];
@@ -440,8 +476,19 @@ void TakClient::serviceRx() {
     bumpRx("receive protocol negotiation timed out");
     return;
   }
-  // The protocol request is the only write on this socket.
   sendProtoAsk(_rxlink.tls, _rxlink.in, "receive");
+  if (_rxlink.in.out_proto == 1 || !chatEnabled()) return;
+  if (!_rxlink.presence_due && millis() - _rxlink.last_presence_ms < 20000UL) return;
+  time_t now = nowUtc();
+  size_t n = now ? TakCot::buildPresence(_tx_buf, sizeof(_tx_buf), _gw_uid, _cfg->prefs, now) : 0;
+  if (!n) return;
+  if (writeCotTo(_rxlink.tls, _rxlink.in, _tx_buf, n) < 0) {
+    bumpRx("receive write failed");
+    return;
+  }
+  if (_rxlink.presence_due) Serial.println("[TAK] receive announced gateway presence");
+  _rxlink.presence_due = false;
+  _rxlink.last_presence_ms = millis();
 }
 
 // ---------- inbound CoT (GeoChat -> MeshCore) ----------
@@ -721,13 +768,16 @@ void TakClient::processRx(TakInSock& s){
         cot_len = msg_len;
         got = true;
       }
+      if (got) noteLinkEvent(&s != &_pub, type, true);
       if (got && strcmp(type, "b-t-f") == 0) {
         const uint8_t* det = nullptr;
         size_t det_len = 0;
         const uint8_t* xml = nullptr;
         size_t xml_len = 0;
-        static char raw[2800];
-        static char synth[3072];
+        char* raw = (char*)s_out;
+        const size_t raw_cap = sizeof(s_out);
+        char* synth = (char*)s_cot;
+        const size_t synth_cap = sizeof(s_cot);
         bool have = pbField(cot, cot + cot_len, 15, det, det_len) && pbField(det, det + det_len, 1, xml, xml_len) && xml_len;
         if (have) {
           while (xml_len && (*xml == ' ' || *xml == '\t' || *xml == '\r' || *xml == '\n')) {
@@ -735,17 +785,17 @@ void TakClient::processRx(TakInSock& s){
             xml_len--;
           }
           if (xml_len >= 4 && !memcmp(xml, "&lt;", 4)) {
-            xmlUnescape((const char*)xml, xml_len, raw, sizeof(raw));
+            xmlUnescape((const char*)xml, xml_len, raw, raw_cap);
             xml = (const uint8_t*)raw;
             xml_len = strlen(raw);
           }
-          if (xml_len > 2800) xml_len = 2800;
+          if (xml_len > raw_cap - 1) xml_len = raw_cap - 1;
         }
         const char* pre = "<event type='b-t-f'><detail>";
         const char* post = "</detail></event>";
         size_t pre_l = strlen(pre);
         size_t post_l = strlen(post);
-        bool wrapped = have && xml_len && xml[0] == '<' && pre_l + xml_len + post_l + 1 < sizeof(synth);
+        bool wrapped = have && xml_len && xml[0] == '<' && pre_l + xml_len + post_l + 1 < synth_cap;
         if (wrapped) {
           memcpy(synth, pre, pre_l);
           memcpy(synth + pre_l, xml, xml_len);
@@ -761,6 +811,7 @@ void TakClient::processRx(TakInSock& s){
       } else if (got) {
         noteType(type, true);
       } else {
+        noteLinkEvent(&s != &_pub, "frame without CotEvent", true);
         inbound.proto++;
         if (inbound.proto == 1) Serial.println("[TAK] inbound framing is protobuf (0xbf)");
         if (!inbound.note[0]) snprintf(inbound.note, sizeof(inbound.note), "protobuf frame had no CotEvent");
@@ -807,6 +858,7 @@ void TakClient::handleEvent(const char* ev, bool proto) {
   // The receive feed carries every event that certificate can see. Only protocol
   // negotiation and GeoChat are kept; positions and other CoT are not relayed.
   bool receive = _cur && _cur != &_pub;
+  if (!proto) noteLinkEvent(receive, buf, false);
   if (receive && strcmp(buf, "b-t-f") != 0 && strcmp(buf, "t-x-takp-v") != 0 && strcmp(buf, "t-x-takp-r") != 0) {
     return;
   }
@@ -961,14 +1013,21 @@ bool TakClient::queueChat(int ch, const char* sender, const char* text) {
 }
 
 bool TakClient::enqueueXml(const char* xml, size_t len, TakEvKind kind, const char* name) {
-  if (!xml || len == 0 || len >= sizeof(_q[0])) return false;
+  if (!xml || len == 0 || len >= Q_ITEM_MAX) return false;
+  // Callers retry a refused event, which beats starving the TLS sessions and Wi-Fi of heap.
+  if (ESP.getFreeHeap() < Q_MIN_HEAP + len) return false;
+  char* copy = (char*)malloc(len + 1);
+  if (!copy) return false;
   if (_q_count >= QSIZE) {
+    free(_q[_q_head]);
+    _q[_q_head] = nullptr;
     _q_head = (_q_head + 1) % QSIZE;
     _q_count--;
     link.dropped++;
   }
-  memcpy(_q[_q_tail], xml, len);
-  _q[_q_tail][len] = 0;
+  memcpy(copy, xml, len);
+  copy[len] = 0;
+  _q[_q_tail] = copy;
   _q_kind[_q_tail] = kind;
   utf8Copy(_q_name[_q_tail], sizeof(_q_name[0]), name);
   _q_tail = (_q_tail + 1) % QSIZE;
@@ -982,6 +1041,8 @@ bool TakClient::dequeueXml(char* dest, size_t dest_len, size_t& out_len, TakEvKi
   size_t len = strlen(_q[_q_head]);
   if (len + 1 > dest_len) return false;
   memcpy(dest, _q[_q_head], len + 1);
+  free(_q[_q_head]);
+  _q[_q_head] = nullptr;
   out_len = len;
   kind = _q_kind[_q_head];
   utf8Copy(name, name_len, _q_name[_q_head]);
@@ -1107,10 +1168,7 @@ static size_t cotToStream(const char* xml, uint8_t* dest, size_t cap) {
   const char* inner = (open && close && open[1] != '/') ? open + 1 : nullptr;
   size_t inner_len = inner ? (size_t)(close - inner) : 0;
 
-  static uint8_t detail_buf[2048];
-  static uint8_t cot_buf[3072];
-  static uint8_t tak_buf[3200];
-  PbBuf detail{detail_buf, 0, sizeof(detail_buf), true};
+  PbBuf detail{s_detail, 0, sizeof(s_detail), true};
   if (inner_len) detail.bytes(1, inner, inner_len > 1800 ? 1800 : inner_len);
   const char* contact = det ? findTag(det, "contact") : nullptr;
   const char* group = det ? findTag(det, "__group") : nullptr;
@@ -1138,7 +1196,7 @@ static size_t cotToStream(const char* xml, uint8_t* dest, size_t cap) {
   }
   if (!detail.ok) return 0;
 
-  PbBuf cot{cot_buf, 0, sizeof(cot_buf), true};
+  PbBuf cot{s_cot, 0, sizeof(s_cot), true};
   cot.str(1, type);
   if (uid[0]) cot.str(5, uid);
   cot.u64(6, send_ms);
@@ -1153,20 +1211,29 @@ static size_t cotToStream(const char* xml, uint8_t* dest, size_t cap) {
   if (detail.n) cot.msg(15, detail);
   if (!cot.ok) return 0;
 
-  PbBuf tak{tak_buf, 0, sizeof(tak_buf), true};
-  tak.msg(2, cot);
-  if (!tak.ok || tak.n + 12 > cap) return 0;
-  dest[0] = 0xbf;
-  size_t i = 1;
-  uint64_t len = tak.n;
-  do {
-    uint8_t byte = (uint8_t)(len & 0x7f);
-    len >>= 7;
-    if (len) byte |= 0x80;
-    dest[i++] = byte;
-  } while (len);
-  memcpy(dest + i, tak.b, tak.n);
-  return i + tak.n;
+  // TakMessage is just field 2 (cotEvent), so it is written straight into the frame.
+  auto varLen = [](uint64_t v) {
+    size_t n = 1;
+    while (v >>= 7) n++;
+    return n;
+  };
+  auto putVar = [&](size_t& i, uint64_t v) {
+    do {
+      uint8_t byte = (uint8_t)(v & 0x7f);
+      v >>= 7;
+      if (v) byte |= 0x80;
+      dest[i++] = byte;
+    } while (v);
+  };
+  size_t tak_len = 1 + varLen(cot.n) + cot.n;
+  if (tak_len + 12 > cap) return 0;
+  size_t i = 0;
+  dest[i++] = 0xbf;
+  putVar(i, tak_len);
+  dest[i++] = (2 << 3) | 2;
+  putVar(i, cot.n);
+  memcpy(dest + i, cot.b, cot.n);
+  return i + cot.n;
 }
 
 void TakClient::onProtoOffer(TakInSock& s, const char* ev){
@@ -1209,20 +1276,19 @@ void TakClient::onProtoAnswer(TakInSock& s, const char* ev){
   }
 }
 
-int TakClient::writeCot(const char* xml, size_t len) {
-  if (!xml || !_tls || !len) return -1;
+int TakClient::writeCotTo(void* tls, const TakInSock& s, const char* xml, size_t len) {
+  if (!xml || !tls || !len) return -1;
   const void* data = xml;
   size_t n = len;
-  static uint8_t frame[4096];
-  static char lined[4096];
-  if (_pub.out_proto == 2) {
-    n = cotToStream(xml, frame, sizeof(frame));
+  if (s.out_proto == 2) {
+    n = cotToStream(xml, s_out, sizeof(s_out));
     if (!n) {
       Serial.println("[TAK] protobuf encode failed");
       return -1;
     }
-    data = frame;
-  } else if (len + 2 < sizeof(lined)) {
+    data = s_out;
+  } else if (len + 2 < sizeof(s_out)) {
+    char* lined = (char*)s_out;
     memcpy(lined, xml, len);
     lined[len] = 0;
     char* hdr = strstr(lined, "?>");
@@ -1234,9 +1300,27 @@ int TakClient::writeCot(const char* xml, size_t len) {
     }
     data = lined;
   }
-  int w = esp_tls_conn_write(TLS, data, n);
+  int w = esp_tls_conn_write((esp_tls_t*)tls, data, n);
   if (w < 0 || (size_t)w != n) return -1;
   return (int)n;
+}
+
+// The server routes chat for our uid to the connection that last announced it, so while the
+// read link is up it carries the presence and the write link stays publish-only.
+bool TakClient::rxCarriesPresence() const {
+  return _rxlink.state == TakLinkState::Connected && _rxlink.tls && _rxlink.in.out_proto != 1 &&
+         _rxlink.last_presence_ms;
+}
+
+// Logs the first events on each link and every GeoChat, so routing problems show on the console.
+void TakClient::noteLinkEvent(bool receive, const char* type, bool proto) {
+  uint32_t& n = receive ? _rxlink.events : _pub_events;
+  n++;
+  bool chat = !strcmp(type, "b-t-f");
+  if (n <= 20 || chat) {
+    Serial.printf("[TAK] %s got %s (%s)%s\n", receive ? "receive" : "publish", type, proto ? "protobuf" : "xml",
+                  n == 20 && !chat ? " - only GeoChat logged from here" : "");
+  }
 }
 
 void TakClient::noteSent(TakEvKind kind, const char* name) {
@@ -1328,6 +1412,10 @@ void TakClient::bumpBackoff() {
   disconnectTls();
 }
 
+bool TakClient::wantsNetwork() const {
+  return _cfg && _cfg->prefs.enabled && !_paused && _cfg->hasTakHost() && _cfg->hasClientCerts();
+}
+
 const char* TakClient::reconnectBlocker() const {
   if (!_cfg) return "not ready";
   if (!_cfg->prefs.enabled) return "Turn on Send to TAK Server and save first";
@@ -1358,12 +1446,13 @@ void TakClient::loop() {
     }
     return;
   }
+  if (_state == TakLinkState::Disabled) setState(TakLinkState::WaitWifi);  // enabled again or unpaused
 
   // Drop the receive session before a publish reconnect so the two handshakes never overlap.
   if (_state != TakLinkState::Connected) disconnectRx();
 
   if (_state == TakLinkState::Backoff) {
-    if (millis() < _backoff_until) return;
+    if ((long)(millis() - _backoff_until) < 0) return;
     setState(TakLinkState::WaitWifi);
   }
 
@@ -1397,7 +1486,8 @@ void TakClient::loop() {
       bumpBackoff();
       return;
     }
-    if (millis() >= _next_drain) {
+    _net_ok_ms = millis();
+    if ((long)(millis() - _next_drain) >= 0) {
       _next_drain = millis() + 50;
       if (!drainInbound()) {
         captureTlsError("server closed connection");
@@ -1416,13 +1506,14 @@ void TakClient::loop() {
       _last_ping_ms = millis();
       if (_pub.out_proto != 1) queuePing();
     }
-    if (millis() >= _next_refresh) {
+    if ((long)(millis() - _next_refresh) >= 0) {
       processRefreshExpire();
       _next_refresh = millis() + 1000;
     }
     // Hold CoT while the server decides the protocol. After it accepts, both
     // directions are length-framed protobuf (TAK streaming negotiation, step 7a).
-    if (_pub.out_proto != 1 && chatEnabled() && (_presence_due || millis() - _last_presence_ms >= 20000UL)) {
+    if (_pub.out_proto != 1 && chatEnabled() && !rxCarriesPresence() &&
+        (_presence_due || millis() - _last_presence_ms >= 20000UL)) {
       time_t now = nowUtc();
       size_t n = now ? TakCot::buildPresence(_tx_buf, sizeof(_tx_buf), _gw_uid, _cfg->prefs, now) : 0;
       if (!n) {

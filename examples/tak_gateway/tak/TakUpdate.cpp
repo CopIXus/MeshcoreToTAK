@@ -20,6 +20,7 @@
 
 static const unsigned long CHECK_EVERY_MS = 6UL * 3600UL * 1000UL;
 static const unsigned long RETRY_MS = 3600UL * 1000UL;
+static const uint32_t MIN_TLS_BLOCK = 40000;
 
 TakUpdate tak_update;
 
@@ -57,7 +58,7 @@ void TakUpdate::setMsg(TakUpdState s, const char* fmt, ...) {
 }
 
 void TakUpdate::loop() {
-  if (_reboot_at && millis() > _reboot_at) ESP.restart();
+  if (_reboot_at && (long)(millis() - _reboot_at) > 0) ESP.restart();
   if (_running || _uploading || _state == TakUpdState::Rebooting) return;
   if (WiFi.status() != WL_CONNECTED || time(nullptr) < 1700000000) return;
   if ((long)(millis() - _next_check_ms) >= 0) requestCheck();
@@ -69,7 +70,7 @@ bool TakUpdate::start(Job job) {
   _running = true;
   // Idle priority: the TLS handshake is seconds of CPU and must time-slice with IDLE0,
   // which feeds the task watchdog.
-  if (xTaskCreatePinnedToCore(taskEntry, "tak_ota", 10240, this, tskIDLE_PRIORITY, nullptr, 0) != pdPASS) {
+  if (xTaskCreatePinnedToCore(taskEntry, "tak_ota", 12288, this, tskIDLE_PRIORITY, nullptr, 0) != pdPASS) {
     _running = false;
     return false;
   }
@@ -98,10 +99,16 @@ void TakUpdate::taskEntry(void* arg) {
   if (!ok) {
     u->setMsg(TakUpdState::Failed, "%s", err.c_str());
     if (u->_job == Job::Check) u->_next_check_ms = millis() + RETRY_MS;
-    if (u->_client) u->_client->pause(false);
   }
+  if ((!ok || u->_job == Job::Check) && u->_client) u->_client->pause(false);
   u->_running = false;
   vTaskDelete(nullptr);
+}
+
+void TakUpdate::freeTakLinks() {
+  if (!_client) return;
+  _client->pause(true);  // loop() drops both TAK TLS sessions and frees their heap
+  for (int i = 0; i < 100 && !_client->idle(); i++) vTaskDelay(pdMS_TO_TICKS(50));
 }
 
 // GET with manual redirects: GitHub sends release downloads to another host.
@@ -133,6 +140,12 @@ bool TakUpdate::doCheck(String& err) {
   setMsg(TakUpdState::Checking, "Checking GitHub for updates");
   if (WiFi.status() != WL_CONNECTED) {
     err = "No Wi-Fi";
+    return false;
+  }
+  // No PSRAM: a third TLS session next to both TAK links exhausts the heap.
+  freeTakLinks();
+  if (ESP.getMaxAllocHeap() < MIN_TLS_BLOCK) {
+    err = String("Not enough memory to check (") + ESP.getMaxAllocHeap() + " B free block)";
     return false;
   }
   WiFiClientSecure tls;
@@ -178,10 +191,7 @@ bool TakUpdate::doCheck(String& err) {
 bool TakUpdate::doInstall(String& err) {
   setMsg(TakUpdState::Installing, "Preparing update %s", _latest);
   _progress = 0;
-  if (_client) {
-    _client->pause(true);  // frees the TAK TLS session's heap for the download
-    for (int i = 0; i < 100 && !_client->idle(); i++) vTaskDelay(pdMS_TO_TICKS(50));
-  }
+  freeTakLinks();
   WiFiClientSecure tls;
   secure(tls);
   HTTPClient http;
@@ -206,7 +216,7 @@ bool TakUpdate::doInstall(String& err) {
   setMsg(TakUpdState::Installing, "Downloading %s", _latest);
 
   WiFiClient* s = http.getStreamPtr();
-  static uint8_t buf[2048];
+  uint8_t buf[2048];  // on the update task's stack, which only exists while an update runs
   int done = 0;
   unsigned long last = millis();
   while (done < len) {

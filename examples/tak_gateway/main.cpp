@@ -13,6 +13,9 @@
 #include "tak/TakUpdate.h"
 #include "tak/TakVersion.h"
 
+// TLS handshakes for both TAK links run on loop(); 8 KB left under 2 KB spare.
+SET_LOOP_TASK_STACK_SIZE(12 * 1024);
+
 StdRNG fast_rng;
 SimpleMeshTables tables;
 
@@ -47,6 +50,13 @@ static void handleSerial() {
                       tak_config.prefs.tak_host, WiFi.status() == WL_CONNECTED,
                       WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "-",
                       tak_client.lastError());
+        Serial.printf("uptime=%lus heap=%u min_heap=%u rssi=%d gw=%s dns=%s net_ok=%lus ago\n", millis() / 1000,
+                      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(), WiFi.RSSI(),
+                      WiFi.gatewayIP().toString().c_str(), WiFi.dnsIP().toString().c_str(),
+                      tak_client.netOkMs() ? (millis() - tak_client.netOkMs()) / 1000 : 0);
+        TaskHandle_t web = xTaskGetHandle("async_tcp");
+        Serial.printf("stack_free loop=%u web=%u queued=%d\n", (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                      web ? (unsigned)uxTaskGetStackHighWaterMark(web) : 0, tak_client.queued());
       } else if (line.startsWith("fs")) {
         Serial.printf("SPIFFS used %u of %u bytes\n", (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes());
         File root = SPIFFS.open("/");

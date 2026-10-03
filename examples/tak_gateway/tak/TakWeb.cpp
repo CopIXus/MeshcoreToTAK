@@ -10,6 +10,8 @@
 #include "TakText.h"
 #include "TakUpdate.h"
 #include <Utils.h>
+#include <memory>
+#include <new>
 
 extern void onChatConfigChanged();
 extern void requestMeshAdvert();
@@ -22,6 +24,7 @@ static TakWeb* g_web = nullptr;
 static TakConfig* g_cfg = nullptr;
 static TakClient* g_client = nullptr;
 static AsyncAuthenticationMiddleware g_auth;
+static const uint32_t WEB_MIN_HEAP = 20000;
 
 // Handlers run on the AsyncTCP task. The radio, the mesh channel table, the send queue and the
 // TLS sessions belong to the main loop, so handlers leave these requests for TakWeb::loop().
@@ -155,6 +158,13 @@ static int parseHex(const String& s, uint8_t* out, size_t out_len) {
   return s.length() / 2;
 }
 
+// A failed allocation in a handler aborts the whole device, so refuse JSON work when the heap is nearly gone.
+static bool lowHeap(AsyncWebServerRequest* req) {
+  if (ESP.getMaxAllocHeap() >= 6000) return false;
+  req->send(503, "text/plain", "busy");
+  return true;
+}
+
 static bool isHexColor(const String& v) {
   if (v.length() != 7 || v[0] != '#') return false;
   for (int i = 1; i < 7; i++) {
@@ -175,6 +185,14 @@ void TakWeb::begin(TakConfig* cfg, TakClient* client, void (*on_radio_changed)()
   g_auth.setRealm("MeshCore TAK Gateway");
   g_auth.setUsername("admin");
   applyPassword(cfg ? cfg->prefs.setup_password : nullptr);
+  // Each open request holds up to a TCP send window of heap; turn pages away before Wi-Fi starves.
+  g_server->addMiddleware([](AsyncWebServerRequest* req, ArMiddlewareNext next) {
+    if (ESP.getFreeHeap() < WEB_MIN_HEAP) {
+      req->send(503, "text/plain", "Gateway busy, retry in a few seconds");
+      return;
+    }
+    next();
+  });
   g_server->addMiddleware(&g_auth);
   setupRoutes();
 }
@@ -197,6 +215,7 @@ void TakWeb::setupRoutes() {
       req->send(500, "text/plain", "no web");
       return;
     }
+    if (lowHeap(req)) return;
     req->send(200, "application/json", g_web->statusJson());
   });
 
@@ -205,6 +224,7 @@ void TakWeb::setupRoutes() {
       req->send(500, "text/plain", "no web");
       return;
     }
+    if (lowHeap(req)) return;
     req->send(200, "application/json", g_web->configJson());
   });
 
@@ -224,9 +244,13 @@ void TakWeb::setupRoutes() {
         if (index + len < total) return;
 
         TakPrefs& p = g_cfg->prefs;
-        // static: TakPrefs is too large for this task's stack once the filters are in it
-        static TakPrefs before;
-        before = p;
+        // On the heap only while saving: TakPrefs is too large for this task's stack.
+        std::unique_ptr<TakPrefs> keep(new (std::nothrow) TakPrefs(p));
+        if (!keep) {
+          req->send(503, "text/plain", "Gateway busy, try saving again");
+          return;
+        }
+        const TakPrefs& before = *keep;
         String v;
 
         // Required fields keep their old value when blank; optional ones may be cleared.
@@ -865,6 +889,7 @@ void TakWeb::startSetupAp() {
 void TakWeb::startStation() {
   if (!_cfg || !_cfg->hasWifi()) return;
   WiFi.mode(_ap_active ? WIFI_AP_STA : WIFI_STA);
+  WiFi.setSleep(false);  // modem sleep misses frames and stalls inbound web/TLS traffic
   WiFi.begin(_cfg->prefs.wifi_ssid, _cfg->prefs.wifi_psk);
   Serial.printf("[WEB] STA connecting to %s\n", _cfg->prefs.wifi_ssid);
   if (!_server_started) {
@@ -886,6 +911,35 @@ void TakWeb::openSetupAp() {
   if (!_ap_active) startSetupAp();
 }
 
+void TakWeb::checkNetwork() {
+  unsigned long now = millis();
+  if (!_client || !_client->wantsNetwork() || _ap_active) {
+    _net_watch_from = now;
+    _net_rejoins = 0;
+    return;
+  }
+  unsigned long ok = _client->netOkMs();
+  if (ok && (long)(ok - _net_watch_from) > 0) {
+    _net_watch_from = ok;
+    if (_net_rejoins) Serial.println("[WEB] network recovered");
+    _net_rejoins = 0;
+  }
+  if (now - _net_watch_from < NET_DEAD_MS) return;
+
+  if (_net_rejoins >= NET_REJOINS_BEFORE_REBOOT) {
+    Serial.printf("[WEB] network dead after %d Wi-Fi rejoins, restarting\n", _net_rejoins);
+    delay(200);
+    ESP.restart();
+  }
+  _net_rejoins++;
+  _net_watch_from = now;
+  Serial.printf("[WEB] Wi-Fi up but no network for %lus, rejoining (%d/%d)\n", NET_DEAD_MS / 1000,
+                _net_rejoins, NET_REJOINS_BEFORE_REBOOT);
+  WiFi.disconnect(false);
+  delay(100);
+  startStation();
+}
+
 void TakWeb::loop() {
   uint32_t todo = __atomic_exchange_n(&g_todo, 0, __ATOMIC_SEQ_CST);
   if (todo & DO_WIFI) startStation();
@@ -905,6 +959,7 @@ void TakWeb::loop() {
 
   if (WiFi.status() == WL_CONNECTED) {
     _sta_down_since = 0;
+    checkNetwork();
     // Drop the SoftAP once the LAN is up so outbound TAK sockets route cleanly
     if (!_ap_active || _ap_hold_until) {
       _sta_up_since = 0;
@@ -917,6 +972,7 @@ void TakWeb::loop() {
     return;
   }
   _sta_up_since = 0;
+  _net_watch_from = millis();  // the reconnect logic owns a link that is down
   if (!_cfg || !_cfg->hasWifi() || _ap_active) return;
   // Saved Wi-Fi that never connects would otherwise leave the gateway unreachable.
   if (!_sta_down_since) {

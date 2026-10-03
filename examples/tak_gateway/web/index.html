@@ -437,10 +437,20 @@ function setStatus(j){
   const s=(j.last_name&&j.last_name!=='-')?j.last_name:(j.last_advert||'');
   if(s&&s!==sample){sample=s;preview()}
 }
+/* 503 = the gateway is short on memory for a moment; wait and ask again */
+async function getJson(u,tries=1){
+  for(let i=0;;i++){
+    const r=await fetch(u,{cache:'no-store'});
+    if(r.status===503&&i<tries-1){await new Promise(f=>setTimeout(f,1500));continue}
+    if(r.status===503)throw new Error('busy');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.json();
+  }
+}
 async function refreshStatus(){
   if(document.hidden)return;
-  try{const r=await fetch('/api/status',{cache:'no-store'});setStatus(await r.json())}
-  catch(e){$('hdot').className='dot bad';$('hstate').textContent=updating?'restarting…':'offline'}
+  try{setStatus(await getJson('/api/status'))}
+  catch(e){if(e.message==='busy')return;$('hdot').className='dot bad';$('hstate').textContent=updating?'restarting…':'offline'}
 }
 
 /* ---------- firmware ---------- */
@@ -812,7 +822,7 @@ function markCard(el){const c=el&&el.closest&&el.closest('.card.cl');if(c)c.clas
 /* ---------- load / save ---------- */
 async function loadForm(){
   try{
-    const cfg=await(await fetch('/api/config',{cache:'no-store'})).json();
+    const cfg=await getJson('/api/config',8);
     for(const k in cfg){const el=V(k);if(!el)continue;if(el.type==='checkbox')el.checked=cfg[k]==='1';else el.value=cfg[k]}
     if(cfg.key_passphrase)$('key_pass').value=cfg.key_passphrase;
     hasKey=[0,1,2].map(i=>cfg['ch'+i+'_haskey']==='1');
@@ -822,7 +832,7 @@ async function loadForm(){
     syncPreset(false);chanUi();applyBrand();setDirty(false);
     if(!cfg.wifi_ssid)openCard($('c_wifi'),true);
     if(!cfg.tak_host)openCard($('c_conn'),true);
-  }catch(e){toast('Config load failed: '+e.message)}
+  }catch(e){toast(e.message==='busy'?'Gateway is busy - reload the page in a few seconds':'Config load failed: '+e.message)}
 }
 async function save(){
   const o={};

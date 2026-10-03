@@ -102,8 +102,9 @@ struct TakRxLink {
   uint32_t backoff_ms;
   unsigned long next_drain;
   unsigned long up_since_ms;
-  String cert;
-  String key;
+  unsigned long last_presence_ms = 0;
+  bool presence_due = false;
+  uint32_t events = 0;  // CoT events received, logged by type for the first few
   TakRxLink()
       : tls(nullptr),
         state(TakLinkState::Disabled),
@@ -150,6 +151,9 @@ public:
   const char* stateName() const;
   const char* lastError() const { return _last_error; }
   bool ntpOk() const { return _ntp_ok; }
+  // Last time a TCP connection reached the TAK server or the publish link was up.
+  unsigned long netOkMs() const { return _net_ok_ms; }
+  bool wantsNetwork() const;
   time_t nowUtc() const;
   bool tlsConnected() const { return _tls != nullptr && _state == TakLinkState::Connected; }
   const char* rxStateName() const;
@@ -169,16 +173,22 @@ private:
   unsigned long _next_drain = 0;
   unsigned long _next_refresh = 0;
   unsigned long _last_ping_ms = 0;
+  unsigned long _net_ok_ms = 0;
   uint32_t _backoff_ms = 1000;
 
-  // PEM buffers must stay alive for the life of the TLS session
+  // Only held while a handshake is being set up; the CA lives in the esp_tls global store.
+  bool _ca_ok = false;
+  static const uint32_t RX_MIN_HEAP_TO_OPEN = 70000;
+  static const uint32_t RX_MIN_BLOCK_TO_OPEN = 24000;
+  static const uint32_t RX_MIN_HEAP_RUNNING = 12000;
+  static const uint32_t RX_LOW_HEAP_BACKOFF_MS = 120000;
   String _ca_pem;
   String _cert_pem;
   String _key_pem;
 
   char _tx_buf[2048];
   static const int QSIZE = 8;
-  char _q[QSIZE][2048];
+  char* _q[QSIZE] = {};  // heap copies, sized to each event and freed once sent
   TakEvKind _q_kind[QSIZE];
   char _q_name[QSIZE][32];
   int _q_head = 0, _q_tail = 0, _q_count = 0;
@@ -203,7 +213,11 @@ private:
   void handleEvent(const char* ev, bool proto);
   void onProtoOffer(TakInSock& s, const char* ev);
   void onProtoAnswer(TakInSock& s, const char* ev);
-  int writeCot(const char* xml, size_t len);
+  int writeCot(const char* xml, size_t len) { return writeCotTo(_tls, _pub, xml, len); }
+  int writeCotTo(void* tls, const TakInSock& s, const char* xml, size_t len);
+  bool rxCarriesPresence() const;
+  void noteLinkEvent(bool receive, const char* type, bool proto);
+  uint32_t _pub_events = 0;
   bool sendProtoAsk(void* tls, TakInSock& s, const char* tag);
   bool openSession(void*& slot, const String& cert, const String& key, uint16_t port, const char* tag, char* err,
                    size_t err_len);

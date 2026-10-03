@@ -45,13 +45,14 @@ private:
   uint32_t _size = 0;
   char _msg[96] = {0};
   unsigned long _checked_ms = 0;
-  unsigned long _next_check_ms = 60000;
+  unsigned long _next_check_ms = 10UL * 60000UL;  // let the TAK links settle after boot
   unsigned long _reboot_at = 0;
 
   bool start(Job job);
   static void taskEntry(void* arg);
   bool doCheck(String& err);
   bool doInstall(String& err);
+  void freeTakLinks();
   void setMsg(TakUpdState s, const char* fmt, ...);
 };
 
