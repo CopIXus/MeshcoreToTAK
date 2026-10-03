@@ -1,6 +1,9 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
 #include "MyMesh.h"
+#ifdef MESHCORE_TRACKER
+#include "../meshcore_tracker/TrackerBridge.h"
+#endif
 
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
@@ -242,12 +245,19 @@ void setup() {
 #endif
 
   board.onBootComplete();
+
+#ifdef MESHCORE_TRACKER
+  trackerBridgeBegin(the_mesh);
+#endif
 }
 
 void loop() {
   the_mesh.loop();
   interface_manager.loop();
   sensors.loop();
+#ifdef MESHCORE_TRACKER
+  trackerBridgeLoop(the_mesh);
+#endif
 #ifdef DISPLAY_CLASS
   ui_task.loop();
 #endif
