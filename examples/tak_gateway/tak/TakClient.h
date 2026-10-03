@@ -40,6 +40,16 @@ struct TakChatStats {
 
 enum class TakEvKind : uint8_t { Other, Point, Delete, Chat };
 
+// What the TAK server actually sent us. chat_t2m only moves after a mesh send.
+struct TakInTrace {
+  uint32_t xml = 0;        // CoT events in XML
+  uint32_t proto = 0;      // CoT events in TAK protocol protobuf (0xbf frames)
+  uint32_t chat = 0;       // type b-t-f seen
+  uint32_t chat_drop = 0;  // b-t-f not sent to the mesh
+  char type[24] = {0};     // type of the latest event
+  char note[96] = {0};     // latest GeoChat decision
+};
+
 // Counts are of events actually written to the TAK server, not just queued.
 struct TakLinkStats {
   uint32_t points = 0;    // marker updates
@@ -53,6 +63,56 @@ struct TakLinkStats {
   unsigned long last_rx_ms = 0;
   unsigned long last_point_ms = 0;
   char last_point[32] = {0};
+};
+
+// Inbound buffer and TAK protocol negotiation for one streaming connection.
+struct TakInSock {
+  char rx[4096];
+  size_t rx_len;
+  size_t proto_skip;
+  bool logged_head;
+  uint8_t out_proto;  // 0 XML, 1 waiting for TakResponse, 2 protobuf
+  bool want_proto;
+  unsigned long proto_wait_ms;
+  char proto_uid[80];
+  TakInSock()
+      : rx_len(0), proto_skip(0), logged_head(false), out_proto(0), want_proto(false), proto_wait_ms(0) {
+    rx[0] = 0;
+    proto_uid[0] = 0;
+  }
+  void clear() {
+    rx_len = 0;
+    proto_skip = 0;
+    logged_head = false;
+    out_proto = 0;
+    want_proto = false;
+    proto_wait_ms = 0;
+    proto_uid[0] = 0;
+    rx[0] = 0;
+  }
+};
+
+// Optional second TLS session. It reads GeoChat and does not publish.
+struct TakRxLink {
+  TakInSock in;
+  void* tls;
+  TakLinkState state;
+  char error[96];
+  unsigned long backoff_until;
+  uint32_t backoff_ms;
+  unsigned long next_drain;
+  unsigned long up_since_ms;
+  String cert;
+  String key;
+  TakRxLink()
+      : tls(nullptr),
+        state(TakLinkState::Disabled),
+        backoff_until(0),
+        backoff_ms(1000),
+        next_drain(0),
+        up_since_ms(0) {
+    error[0] = 0;
+  }
 };
 
 class TakClient {
@@ -77,10 +137,11 @@ public:
   void announce() { _presence_due = true; }
   // Drops the TAK link (from loop()) and keeps it down, e.g. to free heap for a firmware update.
   void pause(bool p) { _paused = p; }
-  bool idle() const { return _tls == nullptr; }
+  bool idle() const { return _tls == nullptr && _rxlink.tls == nullptr; }
   const char* gatewayUid() const { return _gw_uid; }
   TakChatStats chat;
   TakLinkStats link;
+  TakInTrace inbound;
   int queued() const { return _q_count; }
 
   TakLinkState state() const { return _state; }
@@ -89,6 +150,10 @@ public:
   bool ntpOk() const { return _ntp_ok; }
   time_t nowUtc() const;
   bool tlsConnected() const { return _tls != nullptr && _state == TakLinkState::Connected; }
+  const char* rxStateName() const;
+  const char* rxError() const { return _rxlink.error; }
+  long rxUpSeconds() const;
+  void forgetReceive();
 
 private:
   TakConfig* _cfg = nullptr;
@@ -116,8 +181,9 @@ private:
   char _q_name[QSIZE][32];
   int _q_head = 0, _q_tail = 0, _q_count = 0;
 
-  char _rx[4096];
-  size_t _rx_len = 0;
+  TakInSock _pub;
+  TakRxLink _rxlink;
+  TakInSock* _cur = nullptr;  // socket whose event handleEvent is matching
   static const int IN_SIZE = 4;
   TakChatIn _in[IN_SIZE];
   int _in_head = 0, _in_count = 0;
@@ -125,8 +191,21 @@ private:
   bool _presence_due = false;
   unsigned long _last_presence_ms = 0;
 
-  void processRx();
-  void handleEvent(const char* ev);
+  void processRx(TakInSock& s);
+  void rxConsume(TakInSock& s, size_t n);
+  void noteType(const char* type, bool proto);
+  void handleEvent(const char* ev, bool proto);
+  void onProtoOffer(TakInSock& s, const char* ev);
+  void onProtoAnswer(TakInSock& s, const char* ev);
+  int writeCot(const char* xml, size_t len);
+  bool sendProtoAsk(void* tls, TakInSock& s, const char* tag);
+  bool openSession(void*& slot, const String& cert, const String& key, uint16_t port, const char* tag, char* err,
+                   size_t err_len);
+  bool connectRx();
+  void disconnectRx();
+  bool drainRx();
+  void serviceRx();
+  void bumpRx(const char* why);
 
   void setError(const char* msg);
   void setState(TakLinkState s);

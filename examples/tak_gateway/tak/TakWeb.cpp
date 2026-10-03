@@ -27,6 +27,45 @@ static AsyncAuthenticationMiddleware g_auth;
 // the middleware then answers 401 once the body has been consumed.
 static bool authed(AsyncWebServerRequest* req) { return g_auth.allowed(req); }
 
+static String jsonField(const String& body, const char* key) {
+  String needle = String("\"") + key + "\"";
+  int p = 0;
+  while ((p = body.indexOf(needle, p)) >= 0) {
+    int after = p + needle.length();
+    while (after < (int)body.length() && (body[after] == ' ' || body[after] == '\t')) after++;
+    if (after >= (int)body.length() || body[after] != ':') {
+      p++;
+      continue;
+    }
+    after++;
+    while (after < (int)body.length() && (body[after] == ' ' || body[after] == '\t')) after++;
+    if (after >= (int)body.length() || body[after] != '"') {
+      p++;
+      continue;
+    }
+    after++;
+    String out;
+    while (after < (int)body.length()) {
+      char c = body[after++];
+      if (c == '\\' && after < (int)body.length()) {
+        char n = body[after++];
+        if (n == 'n') out += '\n';
+        else if (n == 'r') out += '\r';
+        else if (n == 't') out += '\t';
+        else if (n == '"') out += '"';
+        else if (n == '\\') out += '\\';
+        else if (n == 'u') after += 4;
+        else out += n;
+        continue;
+      }
+      if (c == '"') return out;
+      out += c;
+    }
+    return out;
+  }
+  return String();
+}
+
 static void applyPassword(const char* pwd) {
   g_auth.setPassword(pwd && pwd[0] ? pwd : "meshcore");
   g_auth.generateHash();
@@ -214,6 +253,8 @@ void TakWeb::setupRoutes() {
         }
 
         setu(p.tak_port, "tak_port", 1, 65535);
+        setu(p.rx_port, "rx_port", 1, 65535);
+        setc(p.key_passphrase, sizeof(p.key_passphrase), "key_passphrase", false);
         setu(p.stale_sec, "stale_sec", 10, 65535);
         setu(p.refresh_sec, "refresh_sec", 10, 65535);
         setu(p.max_age_sec, "max_age_sec", 60, 65535);
@@ -330,11 +371,13 @@ void TakWeb::setupRoutes() {
                             strcmp(before.tak_host, p.tak_host) != 0 ||
                             strcmp(before.wifi_ssid, p.wifi_ssid) != 0 ||
                             strcmp(before.wifi_psk, p.wifi_psk) != 0;
+        bool rx_port_changed = before.rx_port != p.rx_port;
         bool radio_changed = before.lora_freq != p.lora_freq || before.lora_bw != p.lora_bw ||
                              before.lora_sf != p.lora_sf || before.lora_cr != p.lora_cr;
         bool wifi_changed = strcmp(before.wifi_ssid, p.wifi_ssid) != 0 || strcmp(before.wifi_psk, p.wifi_psk) != 0;
         if (wifi_changed && g_web) g_web->startStation();
         if (link_changed && g_client) g_client->requestConnect();
+        if (rx_port_changed && g_client) g_client->forgetReceive();
         if (radio_changed && g_radio_cb) g_radio_cb();
         bool chat_changed = memcmp(before.chat, p.chat, sizeof(p.chat)) != 0 ||
                             strcmp(before.chat_callsign, p.chat_callsign) != 0 ||
@@ -436,53 +479,45 @@ void TakWeb::setupRoutes() {
         for (size_t i = 0; i < len; i++) body += (char)data[i];
         if (index + len < total) return;
 
-        auto extract = [&](const char* key) -> String {
-          // Match exact JSON key "name" (not prefix of another key), allow spaces around ':'
-          String needle = String("\"") + key + "\"";
-          int p = 0;
-          while ((p = body.indexOf(needle, p)) >= 0) {
-            int after = p + needle.length();
-            while (after < (int)body.length() && (body[after] == ' ' || body[after] == '\t')) after++;
-            if (after >= (int)body.length() || body[after] != ':') {
-              p++;
-              continue;
-            }
-            after++;
-            while (after < (int)body.length() && (body[after] == ' ' || body[after] == '\t')) after++;
-            if (after >= (int)body.length() || body[after] != '"') {
-              p++;
-              continue;
-            }
-            after++;  // opening quote
-            String out;
-            while (after < (int)body.length()) {
-              char c = body[after++];
-              if (c == '\\' && after < (int)body.length()) {
-                char n = body[after++];
-                if (n == 'n') out += '\n';
-                else if (n == 'r') out += '\r';
-                else if (n == 't') out += '\t';
-                else if (n == '"') out += '"';
-                else if (n == '\\') out += '\\';
-                else if (n == 'u') after += 4;
-                else out += n;
-                continue;
-              }
-              if (c == '"') return out;
-              out += c;
-            }
-            return out;
-          }
-          return String();
-        };
         TakCerts::Bundle b;
-        b.ca = extract("ca");
-        b.cert = extract("cert");
-        b.key = extract("key");
-        b.passphrase = extract("key_passphrase");
+        b.ca = jsonField(body, "ca");
+        b.cert = jsonField(body, "cert");
+        b.key = jsonField(body, "key");
+        b.passphrase = jsonField(body, "key_passphrase");
         String err;
         bool ok = TakCerts::install(g_cfg, b, err);
         if (ok && g_client) g_client->requestConnect();
+        req->send(ok ? 200 : 400, "text/plain", err);
+      });
+
+  g_server->on("/api/rx-certs/delete", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!g_cfg) {
+      req->send(500, "text/plain", "no cfg");
+      return;
+    }
+    TakCerts::removeRx(g_cfg);
+    if (g_client) g_client->forgetReceive();
+    req->send(200, "text/plain", "Receive certificate removed");
+  });
+
+  g_server->on(
+      "/api/rx-certs", HTTP_POST,
+      [](AsyncWebServerRequest* req) {},
+      nullptr,
+      [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+        if (!authed(req)) return;
+        if (!g_cfg) {
+          req->send(500, "text/plain", "no cfg");
+          return;
+        }
+        static String body;
+        if (index == 0) body = "";
+        for (size_t i = 0; i < len; i++) body += (char)data[i];
+        if (index + len < total) return;
+        String err;
+        bool ok = TakCerts::installRx(g_cfg, jsonField(body, "cert"), jsonField(body, "key"),
+                                      jsonField(body, "key_passphrase").c_str(), err);
+        if (ok && g_client) g_client->forgetReceive();
         req->send(ok ? 200 : 400, "text/plain", err);
       });
 
@@ -608,7 +643,12 @@ String TakWeb::statusJson() const {
   j += "\"ntp_epoch\":" + String((unsigned long)time(nullptr)) + ",";
   j += "\"tak_host\":\"" + jsonEsc(String(_cfg ? _cfg->prefs.tak_host : "")) + "\",";
   j += "\"tak_port\":" + String(_cfg ? _cfg->prefs.tak_port : 0) + ",";
+  j += "\"rx_port\":" + String(_cfg ? _cfg->prefs.rx_port : 0) + ",";
   j += "\"certs\":" + String(_cfg && _cfg->hasClientCerts() ? "true" : "false") + ",";
+  j += "\"rx_certs\":" + String(_cfg && _cfg->hasRxCerts() ? "true" : "false") + ",";
+  j += "\"rx_state\":\"" + jsonEsc(String(_client ? _client->rxStateName() : "OFF")) + "\",";
+  j += "\"rx_up\":" + String(_client ? _client->rxUpSeconds() : -1) + ",";
+  j += "\"rx_err\":\"" + jsonEsc(String(_client ? _client->rxError() : "")) + "\",";
   j += "\"heap\":" + String(ESP.getFreeHeap()) + ",";
   if (_cfg) {
     j += "\"preset\":\"" + jsonEsc(String(_cfg->prefs.preset)) + "\",";
@@ -643,6 +683,13 @@ String TakWeb::statusJson() const {
     const TakChatStats& c = _client->chat;
     j += "\"chat_m2t\":" + String(c.mesh_to_tak) + ",";
     j += "\"chat_t2m\":" + String(c.tak_to_mesh) + ",";
+    const TakInTrace& in = _client->inbound;
+    j += "\"rx_xml\":" + String(in.xml) + ",";
+    j += "\"rx_proto\":" + String(in.proto) + ",";
+    j += "\"rx_chat\":" + String(in.chat) + ",";
+    j += "\"rx_drop\":" + String(in.chat_drop) + ",";
+    j += "\"rx_type\":\"" + jsonEsc(String(in.type)) + "\",";
+    j += "\"rx_note\":\"" + jsonEsc(String(in.note)) + "\",";
     j += "\"chat_recent\":[";
     for (int i = 0; i < c.recent_n; i++) {
       const TakChatMsg& m = c.recent[i];
@@ -704,6 +751,7 @@ String TakWeb::configJson() const {
     j += "\"wifi_psk\":\"" + jsonEsc(String(_cfg->prefs.wifi_psk)) + "\",";
     j += "\"tak_host\":\"" + jsonEsc(String(_cfg->prefs.tak_host)) + "\",";
     j += "\"tak_port\":\"" + String(_cfg->prefs.tak_port) + "\",";
+    j += "\"rx_port\":\"" + String(_cfg->prefs.rx_port) + "\",";
     j += "\"channel_label\":\"" + jsonEsc(String(_cfg->prefs.channel_label)) + "\",";
     j += "\"enabled\":\"" + String(_cfg->prefs.enabled ? 1 : 0) + "\",";
     j += "\"preset\":\"" + jsonEsc(String(_cfg->prefs.preset)) + "\",";

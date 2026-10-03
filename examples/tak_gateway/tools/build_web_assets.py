@@ -190,6 +190,10 @@ def main():
         "set": {"uid": set_uid, "cols": ICONSET_COLS, "items": set_items},
     }
     html = HTML_SRC.read_text(encoding="utf-8")
+    key_js = (GW / "web" / "portal_key.js").read_text(encoding="utf-8")
+    if "/*PORTAL_KEY*/" not in html:
+        raise SystemExit("index.html is missing the /*PORTAL_KEY*/ marker")
+    html = html.replace("/*PORTAL_KEY*/", key_js, 1)
     html = html.replace("__ICON_INDEX__", json.dumps(icon_index, separators=(",", ":")))
     html_gz = gzip.compress(html.encode("utf-8"), compresslevel=9, mtime=0)
 

@@ -22,6 +22,11 @@ struct Bundle {
 // err is a short human message on failure.
 bool install(TakConfig* cfg, const Bundle& in, String& err);
 
+// Optional second identity. Writes only /tak/rx-client.pem and rx-client.key.
+// Reuses the CA and passphrase already stored for the publish certificate.
+bool installRx(TakConfig* cfg, const String& certPem, const String& keyPem, const char* passphrase, String& err);
+void removeRx(TakConfig* cfg);
+
 // Decrypt/prepare key in memory (used at connect time if SPIFFS still has encrypted key).
 bool preparePrivateKey(String& key_pem, const char* passphrase, String& err);
 

@@ -1,6 +1,8 @@
 #include "TakConfig.h"
 #include <string.h>
 
+static_assert(offsetof(TakPrefs, rx_port) == TAK_PREFS_V7_FILE_SIZE, "v7 config file size");
+
 static void copyStr(char* dest, size_t dest_len, const char* src) {
   if (!dest || dest_len == 0) return;
   if (!src) {
@@ -16,6 +18,7 @@ void TakConfig::setDefaults() {
   prefs.version = TAK_CONFIG_VERSION;
   prefs.enabled = false;
   prefs.tak_port = 8089;
+  prefs.rx_port = 8089;
   copyStr(prefs.preset, sizeof(prefs.preset), "US");
   applyPreset("US");
   prefs.name_filter = false;
@@ -96,11 +99,13 @@ bool TakConfig::load() {
   bool v4 = (n == TAK_PREFS_V4_SIZE && tmp.version == 4);
   bool v5 = (n == TAK_PREFS_V5_SIZE && tmp.version == 5);
   bool v6 = (n == TAK_PREFS_V6_SIZE && tmp.version == 6);
-  if (!current && !v2 && !v3 && !v4 && !v5 && !v6) {
+  bool v7 = (n == TAK_PREFS_V7_FILE_SIZE && tmp.version == 7);
+  if (!current && !v2 && !v3 && !v4 && !v5 && !v6 && !v7) {
     return false;
   }
   if (v2) tmp.strip_prefix = false;
-  if (!current) {
+  if (v7) tmp.rx_port = tmp.tak_port ? tmp.tak_port : 8089;
+  if (!current && !v7) {
     // default everything the old file lacks (its tail padding overlapped the first new bytes)
     size_t from = v6 ? TAK_PREFS_V7_START : v5 ? TAK_PREFS_V6_START : v4 ? TAK_PREFS_V5_START : TAK_PREFS_V4_START;
     memcpy((uint8_t*)&tmp + from, (const uint8_t*)&prefs + from, sizeof(tmp) - from);
@@ -127,6 +132,7 @@ bool TakConfig::load() {
     copyStr(prefs.ap_password, sizeof(prefs.ap_password), "meshcoretak");
   }
   if (prefs.tak_port == 0) prefs.tak_port = 8089;
+  if (prefs.rx_port == 0) prefs.rx_port = prefs.tak_port;
   if (prefs.public_room[0] == 0) copyStr(prefs.public_room, sizeof(prefs.public_room), "MeshCore");
   if (strcasecmp(prefs.preset, "CUSTOM") != 0) {
     char name[sizeof(prefs.preset)];
@@ -151,6 +157,8 @@ void TakConfig::factoryResetNetworkAndTak() {
   SPIFFS.remove(caPath());
   SPIFFS.remove(certPath());
   SPIFFS.remove(keyPath());
+  SPIFFS.remove(rxCertPath());
+  SPIFFS.remove(rxKeyPath());
   SPIFFS.remove(logoPath());
   setDefaults();
   save();
@@ -166,6 +174,10 @@ bool TakConfig::hasTakHost() const {
 
 bool TakConfig::hasClientCerts() const {
   return SPIFFS.exists(caPath()) && SPIFFS.exists(certPath()) && SPIFFS.exists(keyPath());
+}
+
+bool TakConfig::hasRxCerts() const {
+  return SPIFFS.exists(rxCertPath()) && SPIFFS.exists(rxKeyPath());
 }
 
 bool TakConfig::writeFile(const char* path, const uint8_t* data, size_t len) {

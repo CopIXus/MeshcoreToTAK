@@ -181,7 +181,7 @@ size_t TakCot::buildPresence(char* dest, size_t dest_len, const char* gw_uid, co
                              time_t now_utc) {
   char t0[32], t1[32], pt[96], call_esc[TAK_CALLSIGN_LEN * 6], rooms[160] = "", rooms_esc[400];
   formatTime(now_utc, t0, sizeof(t0));
-  formatTime(now_utc + 180, t1, sizeof(t1));
+  formatTime(now_utc + 600, t1, sizeof(t1));
   fmtPoint(prefs.chat_lat, prefs.chat_lon, pt, sizeof(pt));
   xmlEscape(prefs.chat_callsign[0] ? prefs.chat_callsign : "MeshCore GW", call_esc, sizeof(call_esc));
   for (int i = 0; i < TAK_MAX_CHAT; i++) {

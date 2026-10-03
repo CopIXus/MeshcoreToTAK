@@ -268,17 +268,38 @@ dialog::backdrop{background:rgba(6,10,16,.7)}
 <div class=kv id=chatKv></div>
 </section>
 
-<section class="card cl" id=c_conn><h2><span class=ti>Connection</span><span class=sum id=s_conn></span></h2>
+<section class="card cl" id=c_conn><h2><span class=ti>TAK Server</span><span class=sum id=s_conn></span></h2>
 <label class=sw><input type=checkbox name=enabled><i></i>Send to TAK Server</label>
 <h3>Wi-Fi</h3>
 <div class=g><div><label class=l>SSID</label><input name=wifi_ssid></div><div><label class=l>Password</label><input name=wifi_psk type=password></div></div>
 <h3>TAK Server</h3>
 <div class=g>
 <div style="grid-column:span 2"><label class=l>Host</label><input name=tak_host placeholder=takserver.example.net></div>
-<div><label class=l>Port</label><input name=tak_port type=number min=1 max=65535></div>
 <div class=full><label class=l>Channel label</label><input name=channel_label placeholder="display only"></div>
+<div><label class=l>Key passphrase</label><input id=key_pass name=key_passphrase type=password value=atakatak autocomplete=off></div>
 </div>
-<p class=hint>Use the host and port from your Portal Integration row.</p>
+<p class=hint>One host, two Portal integrations. Each integration has its own port. Save stores the host, ports, and passphrase. A Portal <b>.key</b> is decrypted in this browser (the usual atakatak key) and the clear key is what gets stored, which is what the device can use.</p>
+<details open>
+<summary>Write — markers, presence, and mesh chat</summary>
+<div class=g><div><label class=l>Write port</label><input name=tak_port type=number min=1 max=65535></div></div>
+<p class=hint>This certificate submits into the group the ATAK phones receive. It is the only source of map markers.</p>
+<div class=g><div class=full><input type=file id=certFiles multiple accept=".pem,.key,.crt,.cer"></div></div>
+<details><summary>Paste Write PEMs manually</summary>
+<label class=l style="margin-top:10px">CA PEM (optional)</label><textarea id=ca></textarea>
+<label class=l style="margin-top:8px">Write cert PEM</label><textarea id=cert></textarea>
+<label class=l style="margin-top:8px">Write key PEM</label><textarea id=key></textarea></details>
+<div class=row><button type=button onclick=installCerts()>Install write certificate</button></div>
+<p class=hint id=writeStat style="margin:8px 0 0"></p>
+</details>
+<details>
+<summary>Read — ATAK replies onto the mesh</summary>
+<div class=g><div><label class=l>Read port</label><input name=rx_port type=number min=1 max=65535></div></div>
+<p class=hint>This certificate must be allowed to <b>receive</b> the group the ATAK phones submit into, and must not submit into the group those phones receive. Phone certificates stay as they are.</p>
+<div class=row style="margin-top:0"><input type=file id=rxFiles multiple accept=".pem,.key,.crt,.cer" style="flex:1;min-width:200px">
+<button type=button onclick=installRxCerts()>Install read certificate</button>
+<button type=button class=s onclick=removeRxCerts()>Remove</button></div>
+<p class=hint id=readStat style="margin:8px 0 0"></p>
+</details>
 </section>
 
 <section class="card cl" id=c_radio><h2><span class=ti>MeshCore radio</span><span class=sum id=s_radio></span></h2>
@@ -324,18 +345,6 @@ dialog::backdrop{background:rgba(6,10,16,.7)}
 <p class=hint>Use <b>tak_gateway_heltec_v3.bin</b> from a GitHub release (not the _full file, which is for USB flashing).</p>
 </section>
 </form>
-
-<section class="card cl" id=c_certs><h2><span class=ti>Portal certificates</span><span class=sum id=s_certs></span><small id=certBadge></small></h2>
-<p class=hint style="margin:0 0 10px">Select the Portal <b>.pem</b> and <b>.key</b>. Portal keys use 3DES which this device cannot decrypt;
-if install fails run <code>python examples/tak_gateway/tools/install_certs_to_device.py &lt;device-ip&gt; &lt;cert-folder&gt;</code> from a PC.</p>
-<div class=g><div class=full><input type=file id=certFiles multiple accept=".pem,.key,.crt,.cer"></div>
-<div><label class=l>Key passphrase</label><input id=key_pass type=password value=atakatak></div></div>
-<details><summary>Paste PEMs manually</summary>
-<label class=l style="margin-top:10px">CA PEM (optional)</label><textarea id=ca></textarea>
-<label class=l style="margin-top:8px">Client cert PEM</label><textarea id=cert></textarea>
-<label class=l style="margin-top:8px">Client key PEM</label><textarea id=key></textarea></details>
-<div class=row><button type=button onclick=installCerts()>Install certificates</button></div>
-</section>
 </div>
 
 <div id=bar><div class=in><span>Unsaved changes</span><button type=button class=s onclick=loadForm()>Discard</button><button type=button onclick=save()>Save</button></div></div>
@@ -376,7 +385,8 @@ function setStatus(j){
     ['Markers sent',j.tak_points??'—',(j.tak_points?['last '+j.tak_point_name,ago(j.tak_point_ago)]:['none yet']).concat(j.tak_dropped?['!'+j.tak_dropped+' dropped (queue full)']:[]),
       j.tak_points?'ok':''],
     ['On TAK map',j.nodes??'—',[(j.gps_heard||0)+' GPS node'+(j.gps_heard==1?'':'s')+' heard',(j.tak_removed||0)+' removed']],
-    ['Chat bridged',(j.chat_m2t||0)+' / '+(j.chat_t2m||0),['mesh→TAK / TAK→mesh','last '+ago(j.chat_ago)]],
+    ['Chat bridged',(j.chat_m2t||0)+' / '+(j.chat_t2m||0),['mesh→TAK / TAK→mesh','last '+ago(j.chat_ago),
+      j.rx_certs?('Read '+(j.rx_state||'')+' :'+(j.rx_port||'')+(j.rx_up>=0?' · up '+rel(j.rx_up):'')+(j.rx_err?' · '+j.rx_err:'')):'Read certificate not installed']],
     ['Mesh packets',j.rx_packets??'—',[(rxOld&&j.rx_packets?'!':'')+'last '+ago(j.rx_last_ago),j.rx_packets?'RSSI '+j.rx_rssi+' · SNR '+j.rx_snr:''],
       j.rx_packets?(rxOld?'warn':'ok'):'warn'],
     ['Adverts heard',j.adverts??'—',[(j.adverts_gps||0)+' with GPS · last GPS '+ago(j.gps_ago),
@@ -388,7 +398,13 @@ function setStatus(j){
     (m[2]||[]).map(l=>{const w=String(l).startsWith('!');return '<em'+(w?' class=w':'')+'>'+(esc(w?l.slice(1):l)||'&nbsp;')+'</em>'}).join('')+'</div>').join('');
   $('serr').textContent=j.error&&!ok?'Last error: '+j.error:'';
   $('up').textContent='up '+rel(j.uptime_s)+(j.batt_mv?' · battery '+j.batt_pct+'%':'')+' · heap '+Math.round((j.heap||0)/1024)+' KB';
-  const cb=$('certBadge');cb.textContent=j.certs?'installed':'not installed';cb.style.color=j.certs?'var(--acc)':'var(--bad)';
+  const ws=$('writeStat'),rs=$('readStat');
+  if(ws) ws.textContent=j.certs?('Write certificate installed · link '+(j.state||'')):'Write certificate not installed';
+  if(rs){
+    if(!j.rx_certs) rs.textContent='Read certificate not installed. ATAK replies stay on the server until one is installed.';
+    else rs.textContent='Read link: '+(j.rx_state||'')+' on port '+(j.rx_port||'')+(j.rx_up>=0?' · up '+rel(j.rx_up):'')+
+      (j.rx_err?' · '+j.rx_err:'')+' · TAK→mesh '+(j.chat_t2m||0);
+  }
   $('chatKv').innerHTML='<b>TAK uid</b><span>'+esc(j.gw_uid||'—')+'</span>';
   $('advStat').textContent=j.advert_ago!=null?'sent '+ago(j.advert_ago):'';
   const rc=j.chat_recent||[];
@@ -763,11 +779,10 @@ function sums(){
   if(V('public_on').checked)ch.push('Public → '+(v('public_room')||'MeshCore'));
   for(let i=0;i<3;i++){const n=v('ch'+i+'_name');if(n&&V('ch'+i+'_on').checked)ch.push(n+' ↔ '+(v('ch'+i+'_room')||n))}
   S('chat',ch.length?ch.join(' · '):'no channels bridged');
-  S('conn',(V('enabled').checked?(v('tak_host')||'no host')+':'+v('tak_port'):'TAK sending off')+' · Wi-Fi '+(v('wifi_ssid')||'not set'));
+  S('conn',(V('enabled').checked?(v('tak_host')||'no host')+' · write :'+v('tak_port')+' · read :'+v('rx_port'):'TAK sending off')+' · Wi-Fi '+(v('wifi_ssid')||'not set'));
   S('radio',V('preset').selectedOptions[0].text+' · '+v('lora_freq')+' MHz · BW'+v('lora_bw')+' SF'+v('lora_sf')+' CR'+v('lora_cr'));
   const bt=v('banner_text');
   S('brand',(v('ui_title')||'MeshCore TAK Gateway')+(V('banner_on').checked&&bt?' · banner "'+bt+'"':'')+(hasLogo?' · logo':''));
-  S('certs','client certificate for the TAK connection');
 }
 function markCard(el){const c=el&&el.closest&&el.closest('.card.cl');if(c)c.classList.add('ch')}
 
@@ -850,20 +865,50 @@ $('sws').onclick=e=>{const c=e.target.dataset.c;if(c)setColor(c,true)};
 document.querySelectorAll('.chips').forEach(ch=>ch.onclick=e=>{const v=e.target.dataset.v;if(!v)return;V(ch.dataset.f).value=v;setDirty(true);preview()});
 
 /* ---------- certs / actions ---------- */
+/*PORTAL_KEY*/
 function readText(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(f)})}
+function unlockKey(pem){
+  const pass=$('key_pass').value||'atakatak';
+  try{return clearPortalKey(pem,pass)}
+  catch(e){
+    if(/cannot open/.test(e.message||''))throw e;
+    throw new Error('Could not decrypt this key. Check the passphrase (often atakatak).');
+  }
+}
 async function installCerts(){
-  toast('Uploading certificates…');
+  toast('Uploading write certificate…');
   try{
     let ca=$('ca').value,cert=$('cert').value,key=$('key').value;
     for(const f of $('certFiles').files){
       const n=f.name.toLowerCase(),t=await readText(f);
       if(n.endsWith('.key'))key=t;else if(n.includes('trust')||(n.includes('ca')&&!n.includes('meshcore')))ca+=t;else cert=t;
     }
-    if(!cert||!key)return toast('Select both the .pem and the .key file');
+    if(!cert||!key)return toast('Select the Write .pem and the Write .key');
+    key=unlockKey(key);
     const r=await fetch('/api/certs',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ca,cert,key,key_passphrase:$('key_pass').value||'atakatak'})});
     toast(await r.text());refreshStatus();
-  }catch(e){toast('Cert install error: '+e.message)}
+  }catch(e){toast('Write certificate: '+e.message)}
+}
+async function installRxCerts(){
+  toast('Uploading read certificate…');
+  try{
+    let cert='',key='';
+    for(const f of $('rxFiles').files){
+      const n=f.name.toLowerCase(),t=await readText(f);
+      if(n.endsWith('.key'))key=t;else if(!(n.includes('trust')||(n.includes('ca')&&!n.includes('meshcore'))))cert=t;
+    }
+    if(!cert||!key)return toast('Select the Read .pem and the Read .key');
+    key=unlockKey(key);
+    const r=await fetch('/api/rx-certs',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cert,key,key_passphrase:$('key_pass').value||'atakatak'})});
+    toast(await r.text());refreshStatus();
+  }catch(e){toast('Read certificate: '+e.message)}
+}
+async function removeRxCerts(){
+  if(!confirm('Remove the Read certificate? ATAK replies will stop reaching the mesh.'))return;
+  const r=await fetch('/api/rx-certs/delete',{method:'POST'});
+  toast(await r.text());refreshStatus();
 }
 async function testTak(){toast('Testing…');const r=await fetch('/api/test',{method:'POST'});toast(await r.text());refreshStatus()}
 async function doReboot(){if(!confirm('Reboot the gateway?'))return;await fetch('/api/reboot',{method:'POST'});toast('Rebooting…')}

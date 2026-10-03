@@ -180,7 +180,10 @@ void MyMesh::loopGateway() {
   TakChatIn m;
   if (_client && _client->popChatIn(m)) {
     ChannelDetails d;
-    if (!getChannel(m.ch, d)) return;
+    if (!getChannel(m.ch, d)) {
+      Serial.printf("[CHAT] no mesh channel slot %u\n", (unsigned)m.ch);
+      return;
+    }
     uint32_t ts = getRTCClock()->getCurrentTime();
     // sendGroupMessage cuts "<sender>: <text>" to MAX_TEXT_LEN bytes; cut on a character boundary first
     int room = MAX_TEXT_LEN - (int)strlen(m.sender) - 2;
@@ -190,6 +193,7 @@ void MyMesh::loopGateway() {
     }
     if (sendGroupMessage(ts, d.channel, m.sender, m.text, strlen(m.text))) {
       _client->noteChat(false, m.ch, m.sender, m.text);
+      Serial.printf("[CHAT] mesh TX ch%d ch#%02x %s: %s\n", m.ch, d.channel.hash[0], m.sender, m.text);
     } else {
       Serial.println("[CHAT] mesh send failed (packet pool full)");
     }

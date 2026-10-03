@@ -18,6 +18,7 @@ TakClient::TakClient() {
 }
 
 TakClient::~TakClient() {
+  disconnectRx();
   disconnectTls();
 }
 
@@ -38,8 +39,8 @@ void TakClient::setError(const char* msg) {
 
 void TakClient::setState(TakLinkState s) { _state = s; }
 
-const char* TakClient::stateName() const {
-  switch (_state) {
+static const char* linkName(TakLinkState s) {
+  switch (s) {
     case TakLinkState::Disabled: return "DISABLED";
     case TakLinkState::WaitWifi: return "WAIT_WIFI";
     case TakLinkState::WaitNtp: return "WAIT_NTP";
@@ -49,6 +50,27 @@ const char* TakClient::stateName() const {
     case TakLinkState::Error: return "ERROR";
   }
   return "?";
+}
+
+const char* TakClient::stateName() const { return linkName(_state); }
+
+const char* TakClient::rxStateName() const {
+  if (!_cfg || !_cfg->hasRxCerts()) return "OFF";
+  if (_rxlink.state == TakLinkState::Disabled) return "WAITING";
+  return linkName(_rxlink.state);
+}
+
+long TakClient::rxUpSeconds() const {
+  if (!_rxlink.tls || _rxlink.state != TakLinkState::Connected) return -1;
+  return (long)((millis() - _rxlink.up_since_ms) / 1000UL);
+}
+
+void TakClient::forgetReceive() {
+  disconnectRx();
+  _rxlink.error[0] = 0;
+  _rxlink.state = TakLinkState::Disabled;
+  _rxlink.backoff_ms = 1000;
+  _rxlink.backoff_until = 0;
 }
 
 void TakClient::requestConnect() {
@@ -74,19 +96,23 @@ void TakClient::disconnectTls() {
   }
 }
 
-void TakClient::captureTlsError(const char* prefix) {
-  char msg[96] = {0};
-  if (_tls) {
+static void formatTlsError(esp_tls_t* tls, const char* prefix, char* msg, size_t n) {
+  if (tls) {
     int esp_code = 0;
     int mbedtls_code = 0;
-    esp_err_t err = esp_tls_get_and_clear_last_error(TLS->error_handle, &esp_code, &mbedtls_code);
+    esp_err_t err = esp_tls_get_and_clear_last_error(tls->error_handle, &esp_code, &mbedtls_code);
     char mbed_str[48] = {0};
     if (mbedtls_code) mbedtls_strerror(mbedtls_code, mbed_str, sizeof(mbed_str));
-    snprintf(msg, sizeof(msg), "%s esp=%s/%d mbed=%s", prefix ? prefix : "TLS",
-             esp_err_to_name(err), esp_code, mbed_str[0] ? mbed_str : "none");
+    snprintf(msg, n, "%s esp=%s/%d mbed=%s", prefix ? prefix : "TLS", esp_err_to_name(err), esp_code,
+             mbed_str[0] ? mbed_str : "none");
   } else {
-    snprintf(msg, sizeof(msg), "%s (no tls handle)", prefix ? prefix : "TLS");
+    snprintf(msg, n, "%s (no tls handle)", prefix ? prefix : "TLS");
   }
+}
+
+void TakClient::captureTlsError(const char* prefix) {
+  char msg[96] = {0};
+  formatTlsError(TLS, prefix, msg, sizeof(msg));
   setError(msg);
   Serial.printf("[TAK] %s\n", msg);
 }
@@ -122,44 +148,50 @@ bool TakClient::loadCertPems() {
   return true;
 }
 
-bool TakClient::connectTls() {
-  if (!_cfg->hasTakHost()) {
-    setError("no TAK host");
+bool TakClient::openSession(void*& slot, const String& cert, const String& key, uint16_t port, const char* tag,
+                            char* err, size_t err_len) {
+  auto note = [&](const char* m) {
+    Serial.printf("[TAK] %s %s\n", tag ? tag : "tls", m);
+    if (err && err_len) {
+      strncpy(err, m, err_len - 1);
+      err[err_len - 1] = 0;
+    } else {
+      setError(m);
+    }
+  };
+  if (slot) {
+    esp_tls_conn_destroy((esp_tls_t*)slot);
+    slot = nullptr;
+  }
+  if (!_cfg || !_cfg->hasTakHost()) {
+    note("no TAK host");
     return false;
   }
-  if (!loadCertPems()) return false;
-
-  setState(TakLinkState::Connecting);
-  disconnectTls();
-  WiFi.mode(WIFI_STA);
-
-  int port = _cfg->prefs.tak_port ? _cfg->prefs.tak_port : 8089;
-  Serial.printf("[TAK] Connecting %s:%d heap=%u\n", _cfg->prefs.tak_host, port, (unsigned)ESP.getFreeHeap());
-
-  IPAddress ip;
-  if (WiFi.hostByName(_cfg->prefs.tak_host, ip)) {
-    Serial.printf("[TAK] DNS %s -> %s\n", _cfg->prefs.tak_host, ip.toString().c_str());
-  }
-
-  _tls = esp_tls_init();
-  if (!_tls) {
-    setError("esp_tls_init failed");
+  if (_ca_pem.isEmpty() || cert.isEmpty() || key.isEmpty()) {
+    note("missing certificate");
     return false;
   }
 
+  if (!port) port = _cfg->prefs.tak_port ? _cfg->prefs.tak_port : 8089;
+  Serial.printf("[TAK] %s connecting %s:%d heap=%u\n", tag, _cfg->prefs.tak_host, port, (unsigned)ESP.getFreeHeap());
+  slot = esp_tls_init();
+  if (!slot) {
+    note("esp_tls_init failed");
+    return false;
+  }
+  esp_tls_t* tls = (esp_tls_t*)slot;
   esp_tls_cfg_t cfg = {};
   // PEM buffers must include the trailing NUL in the reported size.
   cfg.cacert_buf = (const unsigned char*)_ca_pem.c_str();
   cfg.cacert_bytes = _ca_pem.length() + 1;
-  cfg.clientcert_buf = (const unsigned char*)_cert_pem.c_str();
-  cfg.clientcert_bytes = _cert_pem.length() + 1;
-  cfg.clientkey_buf = (const unsigned char*)_key_pem.c_str();
-  cfg.clientkey_bytes = _key_pem.length() + 1;
+  cfg.clientcert_buf = (const unsigned char*)cert.c_str();
+  cfg.clientcert_bytes = cert.length() + 1;
+  cfg.clientkey_buf = (const unsigned char*)key.c_str();
+  cfg.clientkey_bytes = key.length() + 1;
   // Portal server cert SAN/CN is typically "takserver", while Integrations host is an FQDN.
   cfg.common_name = "takserver";
   cfg.skip_common_name = false;
   cfg.timeout_ms = 20000;
-  // Detect a dead server/NAT path within ~2 min instead of sitting "connected" for days.
   tls_keep_alive_cfg_t ka = {};
   ka.keep_alive_enable = true;
   ka.keep_alive_idle = 60;
@@ -167,38 +199,64 @@ bool TakClient::connectTls() {
   ka.keep_alive_count = 4;
   cfg.keep_alive_cfg = &ka;
 
-  int ret = esp_tls_conn_new_sync(_cfg->prefs.tak_host, strlen(_cfg->prefs.tak_host), port, &cfg, TLS);
+  int ret = esp_tls_conn_new_sync(_cfg->prefs.tak_host, strlen(_cfg->prefs.tak_host), port, &cfg, tls);
   if (ret != 1) {
-    captureTlsError("TLS handshake failed");
-    // Fallback: still verify CA chain, but skip CN/SAN name match
-    disconnectTls();
-    _tls = esp_tls_init();
-    if (!_tls) {
-      setError("esp_tls_init failed (retry)");
+    char msg[96];
+    formatTlsError(tls, "TLS handshake failed", msg, sizeof(msg));
+    note(msg);
+    esp_tls_conn_destroy(tls);
+    slot = esp_tls_init();
+    if (!slot) {
+      note("esp_tls_init failed (retry)");
       return false;
     }
+    tls = (esp_tls_t*)slot;
     cfg.common_name = nullptr;
     cfg.skip_common_name = true;
-    Serial.println("[TAK] retry TLS with skip_common_name");
-    ret = esp_tls_conn_new_sync(_cfg->prefs.tak_host, strlen(_cfg->prefs.tak_host), port, &cfg, TLS);
+    Serial.printf("[TAK] %s retry TLS with skip_common_name\n", tag);
+    ret = esp_tls_conn_new_sync(_cfg->prefs.tak_host, strlen(_cfg->prefs.tak_host), port, &cfg, tls);
     if (ret != 1) {
-      captureTlsError("TLS failed");
-      disconnectTls();
+      formatTlsError(tls, "TLS failed", msg, sizeof(msg));
+      note(msg);
+      esp_tls_conn_destroy(tls);
+      slot = nullptr;
       return false;
     }
   }
 
   // The handshake used a 20 s socket timeout; a read must never stall the mesh loop that long.
   int fd = -1;
-  if (esp_tls_get_conn_sockfd(TLS, &fd) == ESP_OK && fd >= 0) {
+  if (esp_tls_get_conn_sockfd(tls, &fd) == ESP_OK && fd >= 0) {
     struct timeval tv = {0, 100000};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  }
+  if (err && err_len) err[0] = 0;
+  return true;
+}
+
+bool TakClient::connectTls() {
+  disconnectRx();  // a second handshake waits until this publish link is up
+  if (!_cfg->hasTakHost()) {
+    setError("no TAK host");
+    return false;
+  }
+  if (!loadCertPems()) return false;
+
+  setState(TakLinkState::Connecting);
+  WiFi.mode(WIFI_STA);
+  IPAddress ip;
+  if (WiFi.hostByName(_cfg->prefs.tak_host, ip)) {
+    Serial.printf("[TAK] DNS %s -> %s\n", _cfg->prefs.tak_host, ip.toString().c_str());
+  }
+  if (!openSession(_tls, _cert_pem, _key_pem, _cfg->prefs.tak_port, "publish", nullptr, 0)) {
+    disconnectTls();
+    return false;
   }
 
   setError("");
   _backoff_ms = 1000;
   _last_ping_ms = millis();
-  _rx_len = 0;
+  _pub.clear();
   _presence_due = true;  // first event on the link, so the server routes replies for our uid here
   link.connects++;
   link.up_since_ms = millis();
@@ -221,18 +279,162 @@ bool TakClient::drainInbound() {
       if (s < 0) return false;
       if (s == 0) return true;
     }
-    int n = esp_tls_conn_read(TLS, _rx + _rx_len, sizeof(_rx) - 1 - _rx_len);
+    int n = esp_tls_conn_read(TLS, _pub.rx + _pub.rx_len, sizeof(_pub.rx) - 1 - _pub.rx_len);
     if (n > 0) {
       link.last_rx_ms = millis();
-      _rx_len += n;
-      _rx[_rx_len] = 0;
-      processRx();
+      _pub.rx_len += n;
+      _pub.rx[_pub.rx_len] = 0;
+      processRx(_pub);
       continue;
     }
     if (n == ESP_TLS_ERR_SSL_WANT_READ || n == ESP_TLS_ERR_SSL_WANT_WRITE) return true;
     return false;  // 0 = server closed, <0 = socket error / keepalive timeout
   }
   return true;
+}
+
+void TakClient::disconnectRx() {
+  if (_rxlink.tls) {
+    esp_tls_conn_destroy((esp_tls_t*)_rxlink.tls);
+    _rxlink.tls = nullptr;
+  }
+  _rxlink.cert = "";
+  _rxlink.key = "";
+  if (_rxlink.state == TakLinkState::Connected) _rxlink.state = TakLinkState::Disabled;
+}
+
+void TakClient::bumpRx(const char* why) {
+  char msg[96];
+  msg[0] = 0;
+  if (why && why[0]) {
+    strncpy(msg, why, sizeof(msg) - 1);
+    msg[sizeof(msg) - 1] = 0;
+  }
+  disconnectRx();
+  strncpy(_rxlink.error, msg, sizeof(_rxlink.error) - 1);
+  _rxlink.error[sizeof(_rxlink.error) - 1] = 0;
+  _rxlink.state = TakLinkState::Backoff;
+  _rxlink.backoff_until = millis() + _rxlink.backoff_ms;
+  if (_rxlink.backoff_ms < 60000) _rxlink.backoff_ms *= 2;
+  Serial.printf("[TAK] receive %s\n", _rxlink.error);
+}
+
+bool TakClient::connectRx() {
+  if (!_cfg || !_cfg->hasRxCerts() || _ca_pem.isEmpty()) {
+    strncpy(_rxlink.error, "receive certificate not ready", sizeof(_rxlink.error) - 1);
+    return false;
+  }
+  String cert = _cfg->readFile(_cfg->rxCertPath());
+  String key = _cfg->readFile(_cfg->rxKeyPath());
+  String kerr;
+  if (!TakCerts::preparePrivateKey(key, _cfg->prefs.key_passphrase, kerr)) {
+    strncpy(_rxlink.error, kerr.c_str(), sizeof(_rxlink.error) - 1);
+    _rxlink.error[sizeof(_rxlink.error) - 1] = 0;
+    return false;
+  }
+  _rxlink.cert = cert;
+  _rxlink.key = key;
+  if (!openSession(_rxlink.tls, _rxlink.cert, _rxlink.key, _cfg->prefs.rx_port, "receive", _rxlink.error,
+                   sizeof(_rxlink.error))) {
+    _rxlink.cert = "";
+    _rxlink.key = "";
+    return false;
+  }
+  _rxlink.in.clear();
+  _rxlink.error[0] = 0;
+  _rxlink.backoff_ms = 1000;
+  _rxlink.up_since_ms = millis();
+  _rxlink.next_drain = millis();
+  _rxlink.state = TakLinkState::Connected;
+  Serial.println("[TAK] receive connected");
+  return true;
+}
+
+bool TakClient::drainRx() {
+  esp_tls_t* tls = (esp_tls_t*)_rxlink.tls;
+  if (!tls) return false;
+  TakInSock& s = _rxlink.in;
+  for (int i = 0; i < 8; i++) {
+    if (esp_tls_get_bytes_avail(tls) <= 0) {
+      int fd = -1;
+      if (esp_tls_get_conn_sockfd(tls, &fd) != ESP_OK || fd < 0) return false;
+      fd_set rfds;
+      FD_ZERO(&rfds);
+      FD_SET(fd, &rfds);
+      struct timeval tv = {0, 0};
+      int sel = select(fd + 1, &rfds, nullptr, nullptr, &tv);
+      if (sel < 0) return false;
+      if (sel == 0) return true;
+    }
+    int n = esp_tls_conn_read(tls, s.rx + s.rx_len, sizeof(s.rx) - 1 - s.rx_len);
+    if (n > 0) {
+      s.rx_len += n;
+      s.rx[s.rx_len] = 0;
+      processRx(s);
+      continue;
+    }
+    if (n == ESP_TLS_ERR_SSL_WANT_READ || n == ESP_TLS_ERR_SSL_WANT_WRITE) return true;
+    return false;
+  }
+  return true;
+}
+
+bool TakClient::sendProtoAsk(void* tls, TakInSock& s, const char* tag) {
+  if (!tls || !s.want_proto || s.out_proto != 0 || !nowUtc()) return false;
+  char uid_esc[160], t0[32], t1[32], req[512];
+  time_t now = nowUtc();
+  TakCot::xmlEscape(s.proto_uid, uid_esc, sizeof(uid_esc));
+  TakCot::formatTime(now, t0, sizeof(t0));
+  TakCot::formatTime(now + 60, t1, sizeof(t1));
+  int n = snprintf(req, sizeof(req),
+                   "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n"
+                   "<event version='2.0' uid='%s' type='t-x-takp-q' how='m-g' time='%s' start='%s' stale='%s'>"
+                   "<point lat='0.0' lon='0.0' hae='0.0' ce='9999999.0' le='9999999.0'/>"
+                   "<detail><TakControl><TakRequest version='1'/></TakControl></detail></event>",
+                   uid_esc, t0, t0, t1);
+  if (n <= 0 || (size_t)n >= sizeof(req)) return false;
+  int w = esp_tls_conn_write((esp_tls_t*)tls, req, (size_t)n);
+  if (w <= 0) return false;
+  s.want_proto = false;
+  s.out_proto = 1;
+  s.proto_wait_ms = millis();
+  Serial.printf("[TAK] %s requested TAK protocol 1\n", tag ? tag : "link");
+  return true;
+}
+
+void TakClient::serviceRx() {
+  if (!_cfg || !_cfg->hasRxCerts()) {
+    if (_rxlink.tls || _rxlink.state != TakLinkState::Disabled) forgetReceive();
+    return;
+  }
+  // Publish must already be up, and a firmware check must not be holding the heap.
+  if (_paused || _state != TakLinkState::Connected || !_tls) {
+    if (_rxlink.tls) disconnectRx();
+    return;
+  }
+  if (_rxlink.state == TakLinkState::Backoff) {
+    if ((long)(millis() - _rxlink.backoff_until) < 0) return;
+    _rxlink.state = TakLinkState::WaitWifi;
+  }
+  if (_rxlink.state != TakLinkState::Connected || !_rxlink.tls) {
+    if (!connectRx()) bumpRx(_rxlink.error[0] ? _rxlink.error : "receive handshake failed");
+    return;
+  }
+  if (millis() >= _rxlink.next_drain) {
+    _rxlink.next_drain = millis() + 50;
+    if (!drainRx()) {
+      char msg[96];
+      formatTlsError((esp_tls_t*)_rxlink.tls, "receive connection closed", msg, sizeof(msg));
+      bumpRx(msg);
+      return;
+    }
+  }
+  if (_rxlink.in.out_proto == 1 && millis() - _rxlink.in.proto_wait_ms > 60000UL) {
+    bumpRx("receive protocol negotiation timed out");
+    return;
+  }
+  // The protocol request is the only write on this socket.
+  sendProtoAsk(_rxlink.tls, _rxlink.in, "receive");
 }
 
 // ---------- inbound CoT (GeoChat -> MeshCore) ----------
@@ -296,64 +498,377 @@ static bool tagAttr(const char* tag, const char* name, char* out, size_t out_len
   return false;
 }
 
-void TakClient::processRx() {
-  char* end;
-  while ((end = strstr(_rx, "</event>"))) {
-    end += 8;
-    char keep = *end;
-    *end = 0;
-    handleEvent(_rx);
-    *end = keep;
-    size_t rest = _rx_len - (end - _rx);
-    memmove(_rx, end, rest + 1);
-    _rx_len = rest;
+void TakClient::rxConsume(TakInSock& s, size_t n){
+  if (n > s.rx_len) n = s.rx_len;
+  memmove(s.rx, s.rx + n, s.rx_len - n + 1);
+  s.rx_len -= n;
+}
+
+void TakClient::noteType(const char* type, bool proto) {
+  if (proto) inbound.proto++;
+  else inbound.xml++;
+  size_t i = 0;
+  if (type) {
+    for (; type[i] && i + 1 < sizeof(inbound.type); i++) {
+      char c = type[i];
+      inbound.type[i] = (c >= 32 && c < 127) ? c : '?';
+    }
   }
-  if (_rx_len >= sizeof(_rx) - 1) {
-    // an event larger than the buffer (e.g. inline attachments): skip to the next one
-    char* next = strstr(_rx + 1, "<event");
-    size_t rest = next ? _rx_len - (next - _rx) : 0;
-    if (next) memmove(_rx, next, rest + 1);
-    _rx_len = rest;
-    _rx[_rx_len] = 0;
+  inbound.type[i] = 0;
+  if (proto && inbound.proto == 1) Serial.println("[TAK] inbound framing is protobuf (0xbf)");
+  if (!proto && inbound.xml == 1) Serial.printf("[TAK] inbound framing is XML, first type %s\n", inbound.type);
+}
+
+// TAK Protocol streaming header is 0xbf + an unsigned varint payload length
+// (TAK Protocol spec, "Streaming Connections"). Version 1 payload is a TakMessage:
+// field 2 = CotEvent, CotEvent field 1 = type, field 15 = Detail, Detail field 1 = xmlDetail.
+// GeoChat keeps <__chat> and <remarks> in xmlDetail. Return 1 = consumed, 0 = need more, -1 = resync.
+static int pbVarint(const uint8_t*& p, const uint8_t* end, uint64_t& v) {
+  v = 0;
+  int shift = 0;
+  while (shift <= 63) {
+    if (p >= end) return 0;
+    uint8_t b = *p++;
+    v |= (uint64_t)(b & 0x7f) << shift;
+    if (!(b & 0x80)) return 1;
+    shift += 7;
+  }
+  return -1;
+}
+
+static bool pbField(const uint8_t* start, const uint8_t* end, uint32_t field, const uint8_t*& out, size_t& out_len) {
+  const uint8_t* p = start;
+  while (p < end) {
+    uint64_t key = 0;
+    if (pbVarint(p, end, key) != 1) return false;
+    uint32_t fn = (uint32_t)(key >> 3);
+    uint32_t wt = (uint32_t)(key & 7);
+    if (wt == 2) {
+      uint64_t n = 0;
+      if (pbVarint(p, end, n) != 1 || n > (uint64_t)(end - p)) return false;
+      if (fn == field) {
+        out = p;
+        out_len = (size_t)n;
+        return true;
+      }
+      p += (size_t)n;
+    } else if (wt == 0) {
+      uint64_t skip = 0;
+      if (pbVarint(p, end, skip) != 1) return false;
+    } else if (wt == 1) {
+      if ((size_t)(end - p) < 8) return false;
+      p += 8;
+    } else if (wt == 5) {
+      if ((size_t)(end - p) < 4) return false;
+      p += 4;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+
+static bool pbString(const uint8_t* start, const uint8_t* end, uint32_t field, char* dest, size_t dest_len) {
+  const uint8_t* s = nullptr;
+  size_t n = 0;
+  if (!pbField(start, end, field, s, n) || !dest_len) return false;
+  if (n >= dest_len) n = dest_len - 1;
+  memcpy(dest, s, n);
+  dest[n] = 0;
+  return true;
+}
+
+static bool typeLooksCot(const char* type) {
+  if (!type || strlen(type) < 3 || !strchr(type, '-')) return false;
+  for (const char* c = type; *c; c++) {
+    if (*c < 32 || *c > 126) return false;
+  }
+  return true;
+}
+
+// How far a raw TakMessage extends. 1 = one message, consumed set. 0 = need more
+// bytes. -1 = not a protobuf message. A 0xbf at a field boundary is the next frame
+// (wire type 7 is illegal, so that byte cannot be a field key).
+static int pbMeasure(const uint8_t* start, const uint8_t* end, size_t& consumed) {
+  const uint8_t* p = start;
+  if (p >= end) return 0;
+  while (p < end) {
+    if (*p == 0xbf && p != start) {
+      consumed = (size_t)(p - start);
+      return 1;
+    }
+    uint64_t key = 0;
+    int rc = pbVarint(p, end, key);
+    if (rc == 0) return 0;
+    if (rc < 0) return -1;
+    uint32_t wt = (uint32_t)(key & 7);
+    if (wt == 2) {
+      uint64_t n = 0;
+      rc = pbVarint(p, end, n);
+      if (rc == 0) return 0;
+      if (rc < 0) return -1;
+      if (n > (uint64_t)(end - p)) return 0;
+      p += (size_t)n;
+    } else if (wt == 0) {
+      uint64_t skip = 0;
+      rc = pbVarint(p, end, skip);
+      if (rc == 0) return 0;
+      if (rc < 0) return -1;
+    } else if (wt == 1) {
+      if ((size_t)(end - p) < 8) return 0;
+      p += 8;
+    } else if (wt == 5) {
+      if ((size_t)(end - p) < 4) return 0;
+      p += 4;
+    } else {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+void TakClient::processRx(TakInSock& s){
+  _cur = &s;
+  if (!s.logged_head && s.rx_len >= 4) {
+    s.logged_head = true;
+    Serial.printf("[TAK] rx head %02x %02x %02x %02x\n", (uint8_t)s.rx[0], (uint8_t)s.rx[1], (uint8_t)s.rx[2],
+                  (uint8_t)s.rx[3]);
+  }
+  if (s.proto_skip) {
+    size_t n = s.proto_skip < s.rx_len ? s.proto_skip : s.rx_len;
+    rxConsume(s, n);
+    s.proto_skip -= n;
+    if (s.proto_skip) return;
+  }
+
+  while (s.rx_len) {
+    if ((uint8_t)s.rx[0] == ' ' || s.rx[0] == '\t' || s.rx[0] == '\r' || s.rx[0] == '\n') {
+      rxConsume(s, 1);
+      continue;
+    }
+    if ((uint8_t)s.rx[0] == 0xbf) {
+      const uint8_t* buf = (const uint8_t*)s.rx;
+      const uint8_t* end = buf + s.rx_len;
+      const uint8_t* msg = nullptr;
+      size_t msg_len = 0;
+      size_t frame = 0;
+      // Multicast header is 0xbf 0x01 0xbf plus a raw TakMessage. A stream frame
+      // whose length varint is 1 is the only lookalike, and a CotEvent is longer.
+      bool mesh = s.rx_len >= 4 && buf[1] == 0x01 && buf[2] == 0xbf && ((buf[3] & 7) == 0 || (buf[3] & 7) == 1 ||
+                                                                        (buf[3] & 7) == 2 || (buf[3] & 7) == 5);
+      if (mesh) {
+        size_t consumed = 0;
+        int m = pbMeasure(buf + 3, end, consumed);
+        if (m == 0) {
+          if (s.rx_len < sizeof(s.rx) - 1) return;
+          Serial.println("[TAK] mesh protobuf larger than buffer, resync");
+          rxConsume(s, 1);
+          continue;
+        }
+        if (m < 0) {
+          rxConsume(s, 1);
+          continue;
+        }
+        msg = buf + 3;
+        msg_len = consumed;
+        frame = 3 + consumed;
+      } else {
+        const uint8_t* after = buf + 1;
+        uint64_t len = 0;
+        int rc = pbVarint(after, end, len);
+        if (rc == 0) return;
+        if (rc < 0) {
+          rxConsume(s, 1);
+          continue;
+        }
+        size_t head = (size_t)(after - buf);
+        if (len > 3500) {
+          s.proto_skip = (size_t)len;
+          rxConsume(s, head);
+          size_t n = s.proto_skip < s.rx_len ? s.proto_skip : s.rx_len;
+          rxConsume(s, n);
+          s.proto_skip -= n;
+          Serial.printf("[TAK] skipped oversized protobuf (%u bytes)\n", (unsigned)len);
+          if (s.proto_skip) return;
+          continue;
+        }
+        if (s.rx_len < head + (size_t)len) return;
+        msg = buf + head;
+        msg_len = (size_t)len;
+        frame = head + msg_len;
+      }
+
+      const uint8_t* cot = nullptr;
+      size_t cot_len = 0;
+      char type[40] = {0};
+      bool got = pbField(msg, msg + msg_len, 2, cot, cot_len) && pbString(cot, cot + cot_len, 1, type, sizeof(type)) &&
+                 typeLooksCot(type);
+      if (!got && pbString(msg, msg + msg_len, 1, type, sizeof(type)) && typeLooksCot(type)) {
+        cot = msg;
+        cot_len = msg_len;
+        got = true;
+      }
+      if (got && strcmp(type, "b-t-f") == 0) {
+        const uint8_t* det = nullptr;
+        size_t det_len = 0;
+        const uint8_t* xml = nullptr;
+        size_t xml_len = 0;
+        static char raw[2800];
+        static char synth[3072];
+        bool have = pbField(cot, cot + cot_len, 15, det, det_len) && pbField(det, det + det_len, 1, xml, xml_len) && xml_len;
+        if (have) {
+          while (xml_len && (*xml == ' ' || *xml == '\t' || *xml == '\r' || *xml == '\n')) {
+            xml++;
+            xml_len--;
+          }
+          if (xml_len >= 4 && !memcmp(xml, "&lt;", 4)) {
+            xmlUnescape((const char*)xml, xml_len, raw, sizeof(raw));
+            xml = (const uint8_t*)raw;
+            xml_len = strlen(raw);
+          }
+          if (xml_len > 2800) xml_len = 2800;
+        }
+        const char* pre = "<event type='b-t-f'><detail>";
+        const char* post = "</detail></event>";
+        size_t pre_l = strlen(pre);
+        size_t post_l = strlen(post);
+        bool wrapped = have && xml_len && xml[0] == '<' && pre_l + xml_len + post_l + 1 < sizeof(synth);
+        if (wrapped) {
+          memcpy(synth, pre, pre_l);
+          memcpy(synth + pre_l, xml, xml_len);
+          memcpy(synth + pre_l + xml_len, post, post_l + 1);
+          handleEvent(synth, true);
+        } else {
+          noteType(type, true);
+          inbound.chat++;
+          inbound.chat_drop++;
+          snprintf(inbound.note, sizeof(inbound.note), "protobuf GeoChat has no <__chat> detail");
+          Serial.println("[CHAT] protobuf b-t-f dropped: no xml detail");
+        }
+      } else if (got) {
+        noteType(type, true);
+      } else {
+        inbound.proto++;
+        if (inbound.proto == 1) Serial.println("[TAK] inbound framing is protobuf (0xbf)");
+        if (!inbound.note[0]) snprintf(inbound.note, sizeof(inbound.note), "protobuf frame had no CotEvent");
+      }
+      rxConsume(s, frame);
+      continue;
+    }
+
+    char* endtag = strstr(s.rx, "</event>");
+    if (!endtag) {
+      if (s.rx_len >= sizeof(s.rx) - 1) {
+        char* next = strstr(s.rx + 1, "<event");
+        void* bf = memchr(s.rx + 1, 0xbf, s.rx_len - 1);
+        char* keep = next;
+        if (bf && (!keep || (char*)bf < keep)) keep = (char*)bf;
+        if (!keep) {
+          s.rx_len = 0;
+          s.rx[0] = 0;
+        } else {
+          rxConsume(s, (size_t)(keep - s.rx));
+        }
+        Serial.println("[TAK] rx resync (event larger than buffer)");
+        continue;
+      }
+      return;
+    }
+    endtag += 8;
+    char keep = *endtag;
+    *endtag = 0;
+    handleEvent(s.rx, false);
+    *endtag = keep;
+    rxConsume(s, (size_t)(endtag - s.rx));
   }
 }
 
-void TakClient::handleEvent(const char* ev) {
-  if (!_cfg || !chatEnabled()) return;
+static bool sameText(const char* a, const char* b) {
+  return a && b && a[0] && b[0] && !strcasecmp(a, b);
+}
+
+void TakClient::handleEvent(const char* ev, bool proto) {
   const char* e = findTag(ev, "event");
   char buf[TAK_CHAT_TEXT_LEN * 2];
-  if (!e || !tagAttr(e, "type", buf, sizeof(buf)) || strcmp(buf, "b-t-f") != 0) return;
+  if (!e || !tagAttr(e, "type", buf, sizeof(buf))) return;
+  // The receive feed carries every event that certificate can see. Only protocol
+  // negotiation and GeoChat are kept; positions and other CoT are not relayed.
+  bool receive = _cur && _cur != &_pub;
+  if (receive && strcmp(buf, "b-t-f") != 0 && strcmp(buf, "t-x-takp-v") != 0 && strcmp(buf, "t-x-takp-r") != 0) {
+    return;
+  }
+  noteType(buf, proto);
+  if (!strcmp(buf, "t-x-takp-v")) onProtoOffer(*_cur, e);
+  else if (!strcmp(buf, "t-x-takp-r")) onProtoAnswer(*_cur, e);
+  if (!_cfg || !chatEnabled() || strcmp(buf, "b-t-f") != 0) return;
   const char* chat = findTag(e, "__chat");
-  if (!chat) return;
+  if (!chat) {
+    inbound.chat++;
+    inbound.chat_drop++;
+    snprintf(inbound.note, sizeof(inbound.note), "%s b-t-f has no __chat", proto ? "protobuf" : "xml");
+    Serial.printf("[CHAT] drop %s\n", inbound.note);
+    return;
+  }
 
-  char room[64], id[64], sender[TAK_CALLSIGN_LEN], from_uid[64];
+  char room[80], id[80], sender[TAK_CALLSIGN_LEN], from_uid[80], to[80];
   tagAttr(chat, "chatroom", room, sizeof(room));
   tagAttr(chat, "id", id, sizeof(id));
   tagAttr(chat, "senderCallsign", sender, sizeof(sender));
-  tagAttr(findTag(chat, "chatgrp"), "uid0", from_uid, sizeof(from_uid));
-  if (!strcmp(from_uid, _gw_uid)) return;
+  const char* grp = findTag(chat, "chatgrp");
+  tagAttr(grp, "uid0", from_uid, sizeof(from_uid));
+  if (from_uid[0] && !strcmp(from_uid, _gw_uid)) {
+    snprintf(inbound.note, sizeof(inbound.note), "ignored own echo room='%s'", room);
+    return;
+  }
+  inbound.chat++;
 
-  bool direct = !strcmp(id, _gw_uid) || !strcasecmp(room, _cfg->prefs.chat_callsign);
+  const char* call = (_cfg->prefs.chat_callsign[0]) ? _cfg->prefs.chat_callsign : "MeshCore GW";
+  // ATAK GeoChatService puts the sender in chatgrp uid0 and each recipient in uid1, uid2, ...
+  // remarks to= is the conversation id when the message is for that room.
+  bool direct = sameText(id, _gw_uid) || sameText(id, call) || sameText(room, call);
+  for (int n = 1; n < 8 && !direct; n++) {
+    char key[8], uidn[80];
+    snprintf(key, sizeof(key), "uid%d", n);
+    if (tagAttr(grp, key, uidn, sizeof(uidn))) direct = sameText(uidn, _gw_uid) || sameText(uidn, call);
+  }
   for (const char* d = e; !direct && (d = findTag(d + 1, "dest"));) {
     tagAttr(d, "uid", buf, sizeof(buf));
-    direct = !strcmp(buf, _gw_uid);
+    direct = sameText(buf, _gw_uid) || sameText(buf, call);
+    if (!direct) {
+      tagAttr(d, "callsign", buf, sizeof(buf));
+      direct = sameText(buf, call);
+    }
   }
+  const char* rm = findTag(e, "remarks");
+  tagAttr(rm, "to", to, sizeof(to));
+  if (!direct) direct = sameText(to, _gw_uid) || sameText(to, call);
 
   int ch = -1;
   for (int i = 0; i < TAK_MAX_CHAT && ch < 0; i++) {
     const TakChatChannel& c = _cfg->prefs.chat[i];
-    if (c.enabled && c.secret_len && (!strcasecmp(c.room, room) || !strcasecmp(c.room, id))) ch = i;
+    if (!(c.enabled && c.secret_len && c.room[0])) continue;
+    if (sameText(c.room, room) || sameText(c.room, id) || sameText(c.room, to)) ch = i;
   }
   for (int i = 0; i < TAK_MAX_CHAT && ch < 0 && direct; i++) {
     if (_cfg->prefs.chat[i].enabled && _cfg->prefs.chat[i].secret_len) ch = i;  // DMs go to the first channel
   }
-  if (ch < 0) return;
+  if (ch < 0) {
+    inbound.chat_drop++;
+    snprintf(inbound.note, sizeof(inbound.note), "drop room='%s' id='%s' to='%s'", room, id, to);
+    Serial.printf("[CHAT] %s\n", inbound.note);
+    return;
+  }
 
-  const char* rm = findTag(e, "remarks");
   const char* gt = rm ? strchr(rm, '>') : nullptr;
   const char* close = gt ? strstr(gt, "</remarks>") : nullptr;
-  if (!close || gt[-1] == '/') return;
+  if (!close || gt[-1] == '/') {
+    inbound.chat_drop++;
+    snprintf(inbound.note, sizeof(inbound.note), "drop empty remarks room='%s'", room);
+    Serial.printf("[CHAT] %s\n", inbound.note);
+    return;
+  }
   if (_in_count >= IN_SIZE) {
+    inbound.chat_drop++;
     Serial.println("[CHAT] TAK->mesh queue full, dropping");
     return;
   }
@@ -362,9 +877,15 @@ void TakClient::handleEvent(const char* ev) {
   utf8Copy(m.sender, sizeof(m.sender), sender[0] ? sender : "TAK");
   xmlUnescape(gt + 1, close - gt - 1, m.text, sizeof(m.text));
   utf8TrimTail(m.text);
-  if (!m.text[0]) return;
+  if (!m.text[0]) {
+    inbound.chat_drop++;
+    snprintf(inbound.note, sizeof(inbound.note), "drop blank text room='%s'", room);
+    return;
+  }
   _in_count++;
-  Serial.printf("[CHAT] TAK %s -> mesh ch%d: %s\n", m.sender, ch, m.text);
+  snprintf(inbound.note, sizeof(inbound.note), "%s %s -> ch%d", proto ? "protobuf" : "xml", sender, ch);
+  Serial.printf("[CHAT] TAK %s -> mesh ch%d%s: %s\n", m.sender, ch, (_cur && _cur != &_pub) ? " (receive)" : "",
+                m.text);
 }
 
 bool TakClient::popChatIn(TakChatIn& out) {
@@ -440,6 +961,255 @@ bool TakClient::dequeueXml(char* dest, size_t dest_len, size_t& out_len, TakEvKi
   _q_head = (_q_head + 1) % QSIZE;
   _q_count--;
   return true;
+}
+
+struct PbBuf {
+  uint8_t* b;
+  size_t n;
+  size_t cap;
+  bool ok;
+  void varint(uint64_t v) {
+    if (!ok) return;
+    uint8_t tmp[10];
+    int i = 0;
+    do {
+      uint8_t byte = (uint8_t)(v & 0x7f);
+      v >>= 7;
+      if (v) byte |= 0x80;
+      tmp[i++] = byte;
+    } while (v && i < 10);
+    if (v || n + (size_t)i > cap) {
+      ok = false;
+      return;
+    }
+    memcpy(b + n, tmp, (size_t)i);
+    n += (size_t)i;
+  }
+  void key(uint32_t field, uint32_t wt) { varint(((uint64_t)field << 3) | wt); }
+  void bytes(uint32_t field, const void* s, size_t len) {
+    key(field, 2);
+    varint(len);
+    if (!ok || n + len > cap) {
+      ok = false;
+      return;
+    }
+    if (len) memcpy(b + n, s, len);
+    n += len;
+  }
+  void str(uint32_t field, const char* s) { bytes(field, s, s ? strlen(s) : 0); }
+  void u64(uint32_t field, uint64_t v) {
+    key(field, 0);
+    varint(v);
+  }
+  void f64(uint32_t field, double v) {
+    key(field, 1);
+    if (!ok || n + 8 > cap) {
+      ok = false;
+      return;
+    }
+    memcpy(b + n, &v, 8);  // ESP32 is little-endian, which is the protobuf fixed64 layout
+    n += 8;
+  }
+  void msg(uint32_t field, const PbBuf& m) {
+    if (!m.ok) ok = false;
+    bytes(field, m.b, m.n);
+  }
+};
+
+static uint64_t cotTimeMs(const char* s) {
+  int Y, M, D, h, m, sec;
+  if (!s || sscanf(s, "%d-%d-%dT%d:%d:%d", &Y, &M, &D, &h, &m, &sec) != 6) return 0;
+  int ms = 0;
+  const char* dot = strchr(s, '.');
+  if (dot) ms = atoi(dot + 1);
+  // Days from civil date (Howard Hinnant), then UTC seconds. newlib has no timegm here.
+  int y = Y;
+  unsigned mo = (unsigned)M;
+  y -= mo <= 2;
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);
+  const unsigned doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + (unsigned)D - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  int64_t days = (int64_t)era * 146097 + (int64_t)doe - 719468;
+  int64_t sec_utc = days * 86400 + h * 3600 + m * 60 + sec;
+  if (sec_utc < 0) return 0;
+  return (uint64_t)sec_utc * 1000ull + (uint64_t)ms;
+}
+
+static void fillStr(PbBuf& m, uint32_t field, const char* tag, const char* attr) {
+  char tmp[96];
+  if (tag && tagAttr(tag, attr, tmp, sizeof(tmp)) && tmp[0]) m.str(field, tmp);
+}
+
+// TAK Protocol stream frame: 0xbf, varint length, one TakMessage.
+// CotEvent.detail.xmlDetail keeps the detail XML; contact, __group and takv are also
+// the typed fields from takproto's detail.proto so a protobuf client still sees them.
+static size_t cotToStream(const char* xml, uint8_t* dest, size_t cap) {
+  const char* ev = findTag(xml, "event");
+  if (!ev) return 0;
+  char type[40], uid[80], how[24], ts[40], tstart[40], tstale[40];
+  if (!tagAttr(ev, "type", type, sizeof(type)) || !type[0]) return 0;
+  tagAttr(ev, "uid", uid, sizeof(uid));
+  tagAttr(ev, "how", how, sizeof(how));
+  tagAttr(ev, "time", ts, sizeof(ts));
+  tagAttr(ev, "start", tstart, sizeof(tstart));
+  tagAttr(ev, "stale", tstale, sizeof(tstale));
+  if (!how[0]) snprintf(how, sizeof(how), "m-g");
+  uint64_t send_ms = cotTimeMs(ts);
+  uint64_t start_ms = cotTimeMs(tstart[0] ? tstart : ts);
+  uint64_t stale_ms = cotTimeMs(tstale[0] ? tstale : ts);
+  if (!send_ms) return 0;
+  if (!start_ms) start_ms = send_ms;
+  if (!stale_ms) stale_ms = send_ms;
+
+  const char* pt = findTag(ev, "point");
+  char num[32];
+  auto fattr = [&](const char* attr, double fallback) {
+    if (pt && tagAttr(pt, attr, num, sizeof(num)) && num[0]) return atof(num);
+    return fallback;
+  };
+  double lat = fattr("lat", 0);
+  double lon = fattr("lon", 0);
+  double hae = fattr("hae", 9999999.0);
+  double ce = fattr("ce", 9999999.0);
+  double le = fattr("le", 9999999.0);
+
+  const char* det = findTag(ev, "detail");
+  const char* open = det ? strchr(det, '>') : nullptr;
+  const char* close = open ? strstr(open, "</detail>") : nullptr;
+  const char* inner = (open && close && open[1] != '/') ? open + 1 : nullptr;
+  size_t inner_len = inner ? (size_t)(close - inner) : 0;
+
+  static uint8_t detail_buf[2048];
+  static uint8_t cot_buf[3072];
+  static uint8_t tak_buf[3200];
+  PbBuf detail{detail_buf, 0, sizeof(detail_buf), true};
+  if (inner_len) detail.bytes(1, inner, inner_len > 1800 ? 1800 : inner_len);
+  const char* contact = det ? findTag(det, "contact") : nullptr;
+  const char* group = det ? findTag(det, "__group") : nullptr;
+  const char* takv = det ? findTag(det, "takv") : nullptr;
+  uint8_t sub[192];
+  if (contact) {
+    PbBuf c{sub, 0, sizeof(sub), true};
+    fillStr(c, 1, contact, "endpoint");
+    fillStr(c, 2, contact, "callsign");
+    if (c.ok && c.n) detail.msg(2, c);
+  }
+  if (group) {
+    PbBuf g{sub, 0, sizeof(sub), true};
+    fillStr(g, 1, group, "name");
+    fillStr(g, 2, group, "role");
+    if (g.ok && g.n) detail.msg(3, g);
+  }
+  if (takv) {
+    PbBuf v{sub, 0, sizeof(sub), true};
+    fillStr(v, 1, takv, "device");
+    fillStr(v, 2, takv, "platform");
+    fillStr(v, 3, takv, "os");
+    fillStr(v, 4, takv, "version");
+    if (v.ok && v.n) detail.msg(6, v);
+  }
+  if (!detail.ok) return 0;
+
+  PbBuf cot{cot_buf, 0, sizeof(cot_buf), true};
+  cot.str(1, type);
+  if (uid[0]) cot.str(5, uid);
+  cot.u64(6, send_ms);
+  cot.u64(7, start_ms);
+  cot.u64(8, stale_ms);
+  cot.str(9, how);
+  cot.f64(10, lat);
+  cot.f64(11, lon);
+  cot.f64(12, hae);
+  cot.f64(13, ce);
+  cot.f64(14, le);
+  if (detail.n) cot.msg(15, detail);
+  if (!cot.ok) return 0;
+
+  PbBuf tak{tak_buf, 0, sizeof(tak_buf), true};
+  tak.msg(2, cot);
+  if (!tak.ok || tak.n + 12 > cap) return 0;
+  dest[0] = 0xbf;
+  size_t i = 1;
+  uint64_t len = tak.n;
+  do {
+    uint8_t byte = (uint8_t)(len & 0x7f);
+    len >>= 7;
+    if (len) byte |= 0x80;
+    dest[i++] = byte;
+  } while (len);
+  memcpy(dest + i, tak.b, tak.n);
+  return i + tak.n;
+}
+
+void TakClient::onProtoOffer(TakInSock& s, const char* ev){
+  if (s.out_proto == 2 || s.want_proto) return;
+  bool v1 = false;
+  for (const char* p = ev; (p = findTag(p, "TakProtocolSupport")); p++) {
+    char ver[8];
+    if (tagAttr(p, "version", ver, sizeof(ver)) && !strcmp(ver, "1")) v1 = true;
+  }
+  if (!v1) {
+    snprintf(inbound.note, sizeof(inbound.note), "server protocol offer has no version 1");
+    Serial.println("[TAK] protocol offer without version 1, staying on XML");
+    return;
+  }
+  tagAttr(ev, "uid", s.proto_uid, sizeof(s.proto_uid));
+  if (!s.proto_uid[0]) {
+    snprintf(inbound.note, sizeof(inbound.note), "protocol offer missing uid");
+    return;
+  }
+  s.want_proto = true;
+  snprintf(inbound.note, sizeof(inbound.note), "server offered TAK protocol 1");
+  Serial.println("[TAK] server offered TAK protocol 1");
+}
+
+void TakClient::onProtoAnswer(TakInSock& s, const char* ev){
+  if (s.out_proto != 1) return;
+  char status[8] = {0};
+  tagAttr(findTag(ev, "TakResponse"), "status", status, sizeof(status));
+  if (!strcasecmp(status, "true")) {
+    s.out_proto = 2;
+    s.want_proto = false;
+    if (&s == &_pub) _presence_due = true;
+    snprintf(inbound.note, sizeof(inbound.note), "protobuf streaming on");
+    Serial.println("[TAK] protobuf streaming accepted");
+  } else {
+    s.out_proto = 0;
+    s.want_proto = false;
+    snprintf(inbound.note, sizeof(inbound.note), "protobuf streaming denied");
+    Serial.printf("[TAK] protobuf streaming denied (%s)\n", status[0] ? status : "no status");
+  }
+}
+
+int TakClient::writeCot(const char* xml, size_t len) {
+  if (!xml || !_tls || !len) return -1;
+  const void* data = xml;
+  size_t n = len;
+  static uint8_t frame[4096];
+  static char lined[4096];
+  if (_pub.out_proto == 2) {
+    n = cotToStream(xml, frame, sizeof(frame));
+    if (!n) {
+      Serial.println("[TAK] protobuf encode failed");
+      return -1;
+    }
+    data = frame;
+  } else if (len + 2 < sizeof(lined)) {
+    memcpy(lined, xml, len);
+    lined[len] = 0;
+    char* hdr = strstr(lined, "?>");
+    if (hdr && hdr[2] != '\n') {
+      size_t at = (size_t)(hdr + 2 - lined);
+      memmove(lined + at + 1, lined + at, len - at + 1);
+      lined[at] = '\n';
+      n = len + 1;
+    }
+    data = lined;
+  }
+  int w = esp_tls_conn_write(TLS, data, n);
+  if (w < 0 || (size_t)w != n) return -1;
+  return (int)n;
 }
 
 void TakClient::noteSent(TakEvKind kind, const char* name) {
@@ -585,12 +1355,16 @@ void TakClient::loop() {
   if (!_cfg) return;
 
   if (!_cfg->prefs.enabled || _paused) {
+    disconnectRx();
     if (_state != TakLinkState::Disabled) {
       disconnectTls();
       setState(TakLinkState::Disabled);
     }
     return;
   }
+
+  // Drop the receive session before a publish reconnect so the two handshakes never overlap.
+  if (_state != TakLinkState::Connected) disconnectRx();
 
   if (_state == TakLinkState::Backoff) {
     if (millis() < _backoff_until) return;
@@ -635,37 +1409,52 @@ void TakClient::loop() {
         return;
       }
     }
+    sendProtoAsk(_tls, _pub, "publish");
+    if (_pub.out_proto == 1 && millis() - _pub.proto_wait_ms > 60000UL) {
+      Serial.println("[TAK] protocol negotiation timed out");
+      setError("protocol negotiation timed out");
+      bumpBackoff();
+      return;
+    }
     if (millis() - _last_ping_ms >= 60000UL) {
       _last_ping_ms = millis();
-      queuePing();
+      if (_pub.out_proto != 1) queuePing();
     }
     if (millis() >= _next_refresh) {
       processRefreshExpire();
       _next_refresh = millis() + 1000;
     }
-    if (chatEnabled() && (_presence_due || millis() - _last_presence_ms >= 60000UL)) {
-      _presence_due = false;
-      _last_presence_ms = millis();
+    // Hold CoT while the server decides the protocol. After it accepts, both
+    // directions are length-framed protobuf (TAK streaming negotiation, step 7a).
+    if (_pub.out_proto != 1 && chatEnabled() && (_presence_due || millis() - _last_presence_ms >= 20000UL)) {
       time_t now = nowUtc();
       size_t n = now ? TakCot::buildPresence(_tx_buf, sizeof(_tx_buf), _gw_uid, _cfg->prefs, now) : 0;
-      if (n && esp_tls_conn_write(TLS, _tx_buf, n) != (int)n) {
+      if (!n) {
+        Serial.println("[TAK] presence build failed");
+        _presence_due = false;
+        _last_presence_ms = millis() - 15000UL;
+      } else if (writeCot(_tx_buf, n) < 0) {
         captureTlsError("write failed");
         bumpBackoff();
         return;
+      } else {
+        _presence_due = false;
+        _last_presence_ms = millis();
+        noteSent(TakEvKind::Other, nullptr);
       }
-      if (n) noteSent(TakEvKind::Other, nullptr);
     }
     size_t len = 0;
     TakEvKind kind;
     char name[32];
-    if (dequeueXml(_tx_buf, sizeof(_tx_buf), len, kind, name, sizeof(name))) {
-      int w = esp_tls_conn_write(TLS, _tx_buf, len);
-      if (w < 0 || (size_t)w != len) {
+    if (_pub.out_proto != 1 && dequeueXml(_tx_buf, sizeof(_tx_buf), len, kind, name, sizeof(name))) {
+      int w = writeCot(_tx_buf, len);
+      if (w < 0) {
         captureTlsError("write failed");
         bumpBackoff();
       } else {
         noteSent(kind, name);
       }
     }
+    serviceRx();
   }
 }

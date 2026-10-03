@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
 
-#define TAK_CONFIG_VERSION 7
+#define TAK_CONFIG_VERSION 8
 #define TAK_MAX_NODES 32
 #define TAK_HOST_LEN 128
 #define TAK_PATH_LEN 160
@@ -111,6 +111,9 @@ struct TakPrefs {
   // ---- v7: ordered unit filters, each with its own CoT style ----
   bool send_unmatched;  // nodes matching no filter use cot (the default style)
   TakUnitFilter filters[TAK_MAX_FILTERS];  // first enabled match wins
+
+  // ---- v8: read (ATAK reply) connection uses its own streaming port ----
+  uint16_t rx_port;
 };
 
 #define TAK_PREFS_V2_SIZE offsetof(TakPrefs, strip_prefix)
@@ -123,6 +126,8 @@ struct TakPrefs {
 #define TAK_PREFS_V4_SIZE ((TAK_PREFS_V5_START + 3) & ~(size_t)3)
 #define TAK_PREFS_V5_SIZE ((TAK_PREFS_V6_START + 3) & ~(size_t)3)
 #define TAK_PREFS_V6_SIZE ((TAK_PREFS_V7_START + 3) & ~(size_t)3)
+// v7 files are the struct as shipped before rx_port. Confirmed with the ESP32-S3 compiler.
+#define TAK_PREFS_V7_FILE_SIZE 4480
 
 class TakConfig {
 public:
@@ -136,10 +141,13 @@ public:
   bool hasWifi() const;
   bool hasTakHost() const;
   bool hasClientCerts() const;
+  bool hasRxCerts() const;
 
   const char* caPath() const { return "/tak/ca.pem"; }
   const char* certPath() const { return "/tak/client.pem"; }
   const char* keyPath() const { return "/tak/client.key"; }
+  const char* rxCertPath() const { return "/tak/rx-client.pem"; }
+  const char* rxKeyPath() const { return "/tak/rx-client.key"; }
   const char* logoPath() const { return "/tak/logo.png"; }
 
   bool writeFile(const char* path, const uint8_t* data, size_t len);
