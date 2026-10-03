@@ -48,6 +48,9 @@ input[type=range]{accent-color:var(--acc);padding:0;border:0;background:none}
 .m b{display:block;font-size:1.15rem;margin:1px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .m em{display:block;font-style:normal;font-size:.74rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .m em.w{color:var(--warn)}
+.rl{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;background:var(--card2);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;font-size:.78rem}
+.rl>span{font-size:.66rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-right:4px}
+.rl>b{font-weight:600;background:var(--field);border-radius:10px;padding:1px 8px}.rl>b i{font-style:normal;color:var(--muted);margin-left:4px}
 .cl>h2{cursor:pointer;margin:0;user-select:none}
 .cl>h2:after{content:"";flex:none;width:7px;height:7px;border:solid var(--muted);border-width:0 2px 2px 0;transform:rotate(45deg);margin:0 3px 4px 4px;transition:transform .15s}
 .cl.open>h2:after{transform:rotate(-135deg);margin-bottom:-2px}
@@ -173,7 +176,7 @@ button:disabled{opacity:.45;cursor:default}
 <div id=upd class="upd hide"></div>
 <div id=apNote class="note hide"></div>
 <div id=steps class="steps hide"></div>
-<div class=m id=met></div><div id=serr class=err style="margin-top:8px;font-size:.84rem"></div>
+<div class=m id=met></div><div id=roles class="rl hide"></div><div id=serr class=err style="margin-top:8px;font-size:.84rem"></div>
 <h3>Recent messages</h3>
 <div id=chatLog></div>
 <div class=row><button type=button id=rcBtn onclick=reconnectTak()>Reconnect to TAK</button>
@@ -406,6 +409,7 @@ function toast(t){const e=$('toast');e.textContent=t;e.style.display='block';cle
 function dur(s){s=+s||0;return s>=3600?(s/3600).toFixed(s%3600?1:0)+' h':s>=60?(s/60).toFixed(s%60?1:0)+' min':s+' s'}
 function rel(s){if(s==null)return '';s=Math.floor(+s||0);
   return s<60?s+' s':s<3600?Math.floor(s/60)+' min':s<86400?Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' m':Math.floor(s/86400)+' d '+Math.floor(s%86400/3600)+' h'}
+function kb(b){return b==null?'—':Math.round(b/1024)+' KB'}
 function ago(s,none){return s==null?(none||'never'):rel(s)+' ago'}
 function pos(col,row){return (-col*SZ)+'px '+(-row*SZ)+'px'}
 function icoHtml(col,row){return '<span class=ic style="background-position:'+pos(col,row)+'"></span>'}
@@ -421,14 +425,16 @@ function setStatus(j){
   const bw=j.lora_bw!=null?(+j.lora_bw%1?(+j.lora_bw).toFixed(1):(+j.lora_bw).toFixed(0)):'';
   const rxOld=j.rx_last_ago==null||j.rx_last_ago>1800,hrs=+j.advert_hours||0;
   const next=j.advert_on&&j.advert_ago!=null?'next in '+rel(Math.max(0,hrs*3600-j.advert_ago)):j.advert_on?'waiting for clock':'';
+  const trk=j.trackers||[],blk=j.heap_block||0,slow=+j.loop_worst_ms>=500;
   /* [label, value, [sub lines], state, tooltip]; a sub line starting with "!" is highlighted */
   const M=[
     ['TAK server',ok?'Connected':words(st),ok?['for '+rel(j.tak_up)+(j.tak_connects>1?' · '+j.tak_connects+' sessions':''),'last sent '+ago(j.tak_tx_ago)]:
       [(j.tak_host||'host not set')+':'+(j.tak_port||'?'),j.tak_connects?'was up '+j.tak_connects+'× since boot':'not connected yet'],
       ok?'ok':bad?'bad':'warn',(j.tak_host||'')+':'+(j.tak_port||'')],
-    ['Markers sent',j.tak_points??'—',(j.tak_points?['last '+j.tak_point_name,ago(j.tak_point_ago)]:['none yet']).concat(j.tak_dropped?['!'+j.tak_dropped+' dropped (queue full)']:[]),
-      j.tak_points?'ok':''],
-    ['On TAK map',j.nodes??'—',[(j.gps_heard||0)+' GPS node'+(j.gps_heard==1?'':'s')+' heard',(j.tak_removed||0)+' removed']],
+    ['Adverts to TAK',j.tak_points??'—',[(j.nodes||0)+' on map · '+(j.tak_removed||0)+' removed',j.tak_points?'last '+j.tak_point_name+' · '+ago(j.tak_point_ago):'none yet']
+      .concat(j.tak_dropped?['!'+j.tak_dropped+' dropped (queue full)']:[]),j.tak_points?'ok':'','Advert marker updates written to the TAK server, including refreshes'],
+    ['Trackers to TAK',j.tak_trackers??'—',[trk.length+' tracked · '+(j.trk_heard||0)+' heard',j.tak_trackers?'last '+j.tak_trk_name+' · '+ago(j.tak_trk_ago):'none yet']
+      .concat(j.trk_bad?['!'+j.trk_bad+' unreadable']:[]),j.tak_trackers?'ok':'','Tracker fixes written to the TAK server'],
     ['Chat to TAK',j.chat_m2t||0,['mesh → TAK','last '+ago(j.chat_ago)]],
     ['Mesh packets',j.rx_packets??'—',[(rxOld&&j.rx_packets?'!':'')+'last '+ago(j.rx_last_ago),j.rx_packets?'RSSI '+j.rx_rssi+' · SNR '+j.rx_snr:''],
       j.rx_packets?(rxOld?'warn':'ok'):'warn'],
@@ -436,11 +442,21 @@ function setStatus(j){
       j.last_advert?j.last_advert+' · '+ago(j.adv_heard_ago):'none yet']],
     ['Gateway advert',j.advert_on?'Every '+hrs+' h':'Off',[(j.my_adverts||0)+' sent · last '+ago(j.advert_ago,'not yet'),next]],
     ['Radio',j.lora_freq!=null?(+j.lora_freq).toFixed(3)+' MHz':'—',[(j.preset||'')+' · BW'+bw+' SF'+(j.lora_sf||'')+' CR'+(j.lora_cr||'')]],
-    ['Wi-Fi',j.wifi==='UP'?j.rssi+' dBm':(j.wifi||'—'),[j.ssid||'',j.ip||''],j.wifi==='UP'?'ok':'bad']];
+    ['Wi-Fi',j.wifi==='UP'?j.rssi+' dBm':(j.wifi||'—'),[j.ssid||'',j.ip||''],j.wifi==='UP'?'ok':'bad'],
+    ['Memory',kb(j.heap)+' free',['lowest '+kb(j.heap_min)+' · of '+kb(j.heap_total),(blk<20480?'!':'')+'largest block '+kb(blk)],
+      j.heap<20480||blk<12288?'bad':j.heap<40960||blk<20480?'warn':'ok','The TAK link needs about 50 KB in one piece to reconnect'],
+    ['Processing',j.loop_hz!=null?j.loop_hz+' loops/s':'—',[(slow?'!':'')+'slowest pass '+(j.loop_worst_ms??'—')+' ms','CPU '+(j.cpu_mhz||'?')+' MHz · last 10 s'],
+      j.loop_hz==null?'':slow?'warn':'ok','Main loop rate and its slowest pass. A long pass delays mesh packets and the TAK link.'],
+    ['Storage',j.fs_total?Math.round(100*j.fs_used/j.fs_total)+'% used':'—',[kb(j.fs_used)+' of '+kb(j.fs_total),'TAK queue '+(j.tak_queue||0)],
+      j.fs_total&&j.fs_used/j.fs_total>.9?'warn':'']];
   $('met').innerHTML=M.map(m=>'<div class="'+(m[3]||'')+'"'+(m[4]?' title="'+esc(m[4])+'"':'')+'><span>'+esc(m[0])+'</span><b>'+esc(m[1])+'</b>'+
     (m[2]||[]).map(l=>{const w=String(l).startsWith('!');return '<em'+(w?' class=w':'')+'>'+(esc(w?l.slice(1):l)||'&nbsp;')+'</em>'}).join('')+'</div>').join('');
+  const rl=(j.tak_roles||[]).slice().sort((a,b)=>b[1]-a[1]);
+  if(j.tak_roles_other)rl.push(['other',j.tak_roles_other]);
+  $('roles').classList.toggle('hide',!rl.length);
+  $('roles').innerHTML='<span>Tracker roles sent</span>'+rl.map(r=>'<b>'+esc(r[0]==='-'?'no role':r[0])+'<i>'+r[1]+'</i></b>').join('');
   $('serr').textContent=j.error&&!ok?'Last error: '+j.error:'';
-  $('up').textContent='up '+rel(j.uptime_s)+(j.batt_mv?' · battery '+j.batt_pct+'%':'')+' · heap '+Math.round((j.heap||0)/1024)+' KB';
+  $('up').textContent='up '+rel(j.uptime_s)+(j.batt_mv?' · battery '+j.batt_pct+'%':'');
   certUi();stepsUi(j);
   $('advStat').textContent=j.advert_ago!=null?'sent '+ago(j.advert_ago):'';
   const rc=j.chat_recent||[];

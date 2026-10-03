@@ -30,7 +30,13 @@ struct TakChatStats {
   const char* last() const { return recent_n ? recent[0].text : ""; }
 };
 
-enum class TakEvKind : uint8_t { Other, Point, Delete, Chat };
+enum class TakEvKind : uint8_t { Other, Point, Delete, Chat, Tracker };
+
+// Tracker fixes written to TAK, per role key. Roles past the table count as other.
+struct TakRoleCount {
+  char key[TAK_TRACKER_ROLE_LEN];
+  uint32_t n;
+};
 
 // What the TAK server sent on the link: pings, protocol negotiation and group traffic.
 struct TakInTrace {
@@ -42,7 +48,8 @@ struct TakInTrace {
 
 // Counts are of events actually written to the TAK server, not just queued.
 struct TakLinkStats {
-  uint32_t points = 0;    // marker updates
+  uint32_t points = 0;    // advert marker updates
+  uint32_t trackers = 0;  // tracker fixes
   uint32_t removed = 0;   // marker deletes
   uint32_t chats = 0;     // GeoChat messages (mesh -> TAK)
   uint32_t events = 0;    // everything, incl. keepalives and the gateway contact
@@ -53,6 +60,12 @@ struct TakLinkStats {
   unsigned long last_rx_ms = 0;
   unsigned long last_point_ms = 0;
   char last_point[32] = {0};
+  unsigned long last_tracker_ms = 0;
+  char last_tracker[32] = {0};
+  static const int ROLE_SLOTS = 8;
+  TakRoleCount roles[ROLE_SLOTS] = {};
+  int roles_n = 0;
+  uint32_t roles_other = 0;
 };
 
 // Inbound buffer and TAK protocol negotiation for one streaming connection.
@@ -149,6 +162,7 @@ private:
   char* _q[QSIZE] = {};  // heap copies, sized to each event and freed once sent
   TakEvKind _q_kind[QSIZE];
   char _q_name[QSIZE][32];
+  char _q_role[QSIZE][TAK_TRACKER_ROLE_LEN];
   int _q_head = 0, _q_tail = 0, _q_count = 0;
 
   TakInSock _pub;
@@ -173,9 +187,11 @@ private:
   void disconnectTls();
   bool drainInbound();
   bool queuePing();
-  bool enqueueXml(const char* xml, size_t len, TakEvKind kind = TakEvKind::Other, const char* name = nullptr);
-  bool dequeueXml(char* dest, size_t dest_len, size_t& out_len, TakEvKind& kind, char* name, size_t name_len);
-  void noteSent(TakEvKind kind, const char* name);
+  bool enqueueXml(const char* xml, size_t len, TakEvKind kind = TakEvKind::Other, const char* name = nullptr,
+                  const char* role = nullptr);
+  bool dequeueXml(char* dest, size_t dest_len, size_t& out_len, TakEvKind& kind, char* name, size_t name_len,
+                  char* role, size_t role_len);
+  void noteSent(TakEvKind kind, const char* name, const char* role);
   void processRefreshExpire();
   void bumpBackoff();
   void captureTlsError(const char* prefix);

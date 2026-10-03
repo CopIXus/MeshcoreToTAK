@@ -17,6 +17,8 @@ extern void onChatConfigChanged();
 extern void requestMeshAdvert();
 extern unsigned long lastMeshAdvertMs();
 extern uint32_t meshAdvertsSent();
+extern uint32_t loopRateHz();
+extern uint32_t loopWorstUs();
 extern TakNodes tak_nodes;
 
 static AsyncWebServer* g_server = nullptr;
@@ -786,6 +788,12 @@ String TakWeb::statusJson() const {
   j += "\"cert_cn\":\"" + jsonEsc(g_cert_cn) + "\",\"cert_exp\":\"" + g_cert_exp + "\",";
   j += String("\"ap\":") + (_ap_active ? "true" : "false") + ",";
   j += "\"heap\":" + String(ESP.getFreeHeap()) + ",";
+  j += "\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",";
+  j += "\"heap_block\":" + String(ESP.getMaxAllocHeap()) + ",";
+  j += "\"heap_total\":" + String(ESP.getHeapSize()) + ",";
+  j += "\"cpu_mhz\":" + String(ESP.getCpuFreqMHz()) + ",";
+  j += "\"loop_hz\":" + String(loopRateHz()) + ",";
+  j += "\"loop_worst_ms\":" + String(loopWorstUs() / 1000.0f, 1) + ",";
   if (_cfg) {
     j += "\"preset\":\"" + jsonEsc(String(_cfg->prefs.preset)) + "\",";
     j += "\"lora_freq\":" + String(_cfg->prefs.lora_freq, 3) + ",";
@@ -875,6 +883,15 @@ String TakWeb::statusJson() const {
     j += "\"tak_points\":" + String(l.points) + ",";
     j += "\"tak_point_ago\":" + ago(l.last_point_ms) + ",";
     j += "\"tak_point_name\":\"" + jsonEsc(String(l.last_point)) + "\",";
+    j += "\"tak_trackers\":" + String(l.trackers) + ",";
+    j += "\"tak_trk_ago\":" + ago(l.last_tracker_ms) + ",";
+    j += "\"tak_trk_name\":\"" + jsonEsc(String(l.last_tracker)) + "\",";
+    j += "\"tak_roles\":[";
+    for (int i = 0; i < l.roles_n; i++) {
+      if (i) j += ",";
+      j += "[\"" + jsonEsc(String(l.roles[i].key)) + "\"," + String(l.roles[i].n) + "]";
+    }
+    j += "],\"tak_roles_other\":" + String(l.roles_other) + ",";
     j += "\"tak_removed\":" + String(l.removed) + ",";
     j += "\"tak_chats\":" + String(l.chats) + ",";
     j += "\"tak_events\":" + String(l.events) + ",";

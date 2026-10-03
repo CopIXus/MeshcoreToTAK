@@ -37,6 +37,28 @@ unsigned long lastMeshAdvertMs() { return the_mesh.lastAdvertMs(); }
 
 uint32_t meshAdvertsSent() { return the_mesh.advertsSent(); }
 
+// Main loop passes per second and the slowest pass, over the last 10 s window.
+static const uint32_t LOOP_WINDOW_MS = 10000;
+static volatile uint32_t g_loop_hz = 0;
+static volatile uint32_t g_loop_worst_us = 0;
+uint32_t loopRateHz() { return g_loop_hz; }
+uint32_t loopWorstUs() { return g_loop_worst_us; }
+
+static void noteLoopPass(uint32_t us) {
+  static uint32_t n = 0, worst = 0;
+  static unsigned long start = millis();
+  n++;
+  if (us > worst) worst = us;
+  unsigned long now = millis();
+  if (now - start >= LOOP_WINDOW_MS) {
+    g_loop_hz = (uint32_t)((uint64_t)n * 1000UL / (now - start));
+    g_loop_worst_us = worst;
+    n = 0;
+    worst = 0;
+    start = now;
+  }
+}
+
 static void handleSerial() {
   static String line;
   while (Serial.available()) {
@@ -134,6 +156,7 @@ void setup() {
 }
 
 void loop() {
+  uint32_t pass_start = micros();
   the_mesh.loopGateway();
   tak_client.loop();
   tak_web.loop();
@@ -150,4 +173,5 @@ void loop() {
       WiFi.reconnect();
     }
   }
+  noteLoopPass(micros() - pass_start);
 }

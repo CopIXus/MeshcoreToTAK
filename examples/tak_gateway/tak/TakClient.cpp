@@ -674,7 +674,7 @@ bool TakClient::queueChat(int ch, const char* sender, const char* text) {
   return n && enqueueXml(_tx_buf, n, TakEvKind::Chat);
 }
 
-bool TakClient::enqueueXml(const char* xml, size_t len, TakEvKind kind, const char* name) {
+bool TakClient::enqueueXml(const char* xml, size_t len, TakEvKind kind, const char* name, const char* role) {
   if (!xml || len == 0 || len >= Q_ITEM_MAX) return false;
   // Callers retry a refused event, which beats starving the TLS sessions and Wi-Fi of heap.
   if (ESP.getFreeHeap() < Q_MIN_HEAP + len) return false;
@@ -692,13 +692,14 @@ bool TakClient::enqueueXml(const char* xml, size_t len, TakEvKind kind, const ch
   _q[_q_tail] = copy;
   _q_kind[_q_tail] = kind;
   utf8Copy(_q_name[_q_tail], sizeof(_q_name[0]), name);
+  utf8Copy(_q_role[_q_tail], sizeof(_q_role[0]), role);
   _q_tail = (_q_tail + 1) % QSIZE;
   _q_count++;
   return true;
 }
 
 bool TakClient::dequeueXml(char* dest, size_t dest_len, size_t& out_len, TakEvKind& kind, char* name,
-                           size_t name_len) {
+                           size_t name_len, char* role, size_t role_len) {
   if (_q_count == 0) return false;
   size_t len = strlen(_q[_q_head]);
   if (len + 1 > dest_len) return false;
@@ -708,6 +709,7 @@ bool TakClient::dequeueXml(char* dest, size_t dest_len, size_t& out_len, TakEvKi
   out_len = len;
   kind = _q_kind[_q_head];
   utf8Copy(name, name_len, _q_name[_q_head]);
+  utf8Copy(role, role_len, _q_role[_q_head]);
   _q_head = (_q_head + 1) % QSIZE;
   _q_count--;
   return true;
@@ -966,13 +968,29 @@ int TakClient::writeCot(const char* xml, size_t len) {
   return (int)n;
 }
 
-void TakClient::noteSent(TakEvKind kind, const char* name) {
+void TakClient::noteSent(TakEvKind kind, const char* name, const char* role) {
   link.events++;
   link.last_tx_ms = millis();
   if (kind == TakEvKind::Point) {
     link.points++;
     link.last_point_ms = link.last_tx_ms;
     utf8Copy(link.last_point, sizeof(link.last_point), name);
+  } else if (kind == TakEvKind::Tracker) {
+    link.trackers++;
+    link.last_tracker_ms = link.last_tx_ms;
+    utf8Copy(link.last_tracker, sizeof(link.last_tracker), name);
+    const char* key = (role && role[0]) ? role : "-";
+    int i = 0;
+    while (i < link.roles_n && strcasecmp(link.roles[i].key, key) != 0) i++;
+    if (i < link.roles_n) {
+      link.roles[i].n++;
+    } else if (link.roles_n < TakLinkStats::ROLE_SLOTS) {
+      utf8Copy(link.roles[i].key, sizeof(link.roles[i].key), key);
+      link.roles[i].n = 1;
+      link.roles_n++;
+    } else {
+      link.roles_other++;
+    }
   } else if (kind == TakEvKind::Delete) {
     link.removed++;
   } else if (kind == TakEvKind::Chat) {
@@ -999,7 +1017,7 @@ bool TakClient::queueTrackerPoint(const TakTrackerRecord& rec, const TakCotStyle
                                        rec.has_altitude, rec.altitude_m, rec.has_speed, rec.speed_mps, rec.has_course,
                                        rec.course_deg, style, rec.cot_time, rec.stale_sec);
   if (!n) return false;
-  return enqueueXml(_tx_buf, n, TakEvKind::Point, rec.callsign);
+  return enqueueXml(_tx_buf, n, TakEvKind::Tracker, rec.callsign, rec.role);
 }
 
 bool TakClient::queuePing() {
@@ -1160,13 +1178,15 @@ void TakClient::loop() {
     size_t len = 0;
     TakEvKind kind;
     char name[32];
-    if (_pub.out_proto != 1 && dequeueXml(_tx_buf, sizeof(_tx_buf), len, kind, name, sizeof(name))) {
+    char role[TAK_TRACKER_ROLE_LEN];
+    if (_pub.out_proto != 1 &&
+        dequeueXml(_tx_buf, sizeof(_tx_buf), len, kind, name, sizeof(name), role, sizeof(role))) {
       int w = writeCot(_tx_buf, len);
       if (w < 0) {
         captureTlsError("write failed");
         bumpBackoff();
       } else {
-        noteSent(kind, name);
+        noteSent(kind, name, role);
       }
     }
   }
