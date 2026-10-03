@@ -1,5 +1,7 @@
 #include "TakConfig.h"
 #include <string.h>
+#include <memory>
+#include <new>
 
 static_assert(offsetof(TakPrefs, rx_port) == TAK_PREFS_V7_FILE_SIZE, "v7 config file size");
 static_assert(offsetof(TakPrefs, tracker_ch) > offsetof(TakPrefs, rx_port), "v9 tracker config must append");
@@ -119,7 +121,13 @@ bool TakConfig::load() {
   }
   File f = SPIFFS.open("/tak/config.bin", "r");
   if (!f) return false;
-  TakPrefs tmp;
+  // Several KB since v9; the loop task stack cannot hold a second copy.
+  std::unique_ptr<TakPrefs> holder(new (std::nothrow) TakPrefs);
+  if (!holder) {
+    f.close();
+    return false;
+  }
+  TakPrefs& tmp = *holder;
   memcpy(&tmp, &prefs, sizeof(tmp));  // defaults for any fields the file lacks
   size_t n = f.read((uint8_t*)&tmp, sizeof(tmp));
   f.close();
