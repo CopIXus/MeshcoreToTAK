@@ -38,23 +38,65 @@ static int batteryPercent() {
   return pct;
 }
 
+// This radio's SPIFFS is full, so a new file cannot be created. The companion
+// settings already live in /new_prefs. Role uses the 4 unused pad bytes at
+// offset 36. The callsign is the node name at offset 4.
+static bool patchNewPrefs(int offset, const uint8_t* data, int len) {
+  File f = SPIFFS.open("/new_prefs", "r+");
+  if (!f) return false;
+  bool ok = f.seek(offset) && f.write(data, len) == (size_t)len;
+  f.close();
+  return ok;
+}
+
 static void saveTrackerFile() {
   File f = SPIFFS.open("/tracker.cfg", "w", true);
-  if (!f) {
-    Serial.println("could not save tracker settings");
+  if (f) {
+    f.printf("ch=%u\nrole=%s\n", (unsigned)cfg.channel, cfg.role);
+    f.close();
     return;
   }
-  f.printf("ch=%u\nrole=%s\n", (unsigned)cfg.channel, cfg.role);
-  f.close();
+  uint8_t role[4];
+  memset(role, 0, sizeof(role));
+  memcpy(role, cfg.role, strlen(cfg.role) < 4 ? strlen(cfg.role) : 4);
+  if (!patchNewPrefs(36, role, 4)) {
+    Serial.printf("could not save role (SPIFFS %u of %u bytes used)\n",
+                  (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes());
+  }
+}
+
+static void loadRoleFromPrefs() {
+  File prefs = SPIFFS.open("/new_prefs", "r");
+  if (!prefs || !prefs.seek(36)) {
+    if (prefs) prefs.close();
+    return;
+  }
+  uint8_t raw[4];
+  if (prefs.read(raw, 4) == 4) {
+    char tmp[5];
+    int i = 0;
+    while (i < 4 && ((raw[i] >= 'a' && raw[i] <= 'z') || (raw[i] >= '0' && raw[i] <= '9'))) {
+      tmp[i++] = (char)raw[i];
+    }
+    tmp[i] = 0;
+    if (i >= 2) memcpy(cfg.role, tmp, sizeof(cfg.role));
+  }
+  prefs.close();
 }
 
 static void loadTrackerFile() {
   File f = SPIFFS.open("/tracker.cfg", "r");
-  if (!f) return;
+  if (!f) {
+    loadRoleFromPrefs();
+    return;
+  }
   char buf[64];
   int n = f.read((uint8_t*)buf, sizeof(buf) - 1);
   f.close();
-  if (n <= 0) return;
+  if (n <= 0) {
+    loadRoleFromPrefs();
+    return;
+  }
   buf[n] = 0;
   char* role = strstr(buf, "role=");
   char* slot = strstr(buf, "ch=");
@@ -62,18 +104,20 @@ static void loadTrackerFile() {
     int ch = atoi(slot + 3);
     if (ch >= 0 && ch < MAX_GROUP_CHANNELS) cfg.channel = (uint8_t)ch;
   }
-  if (role) {
-    role += 5;
-    char tmp[5];
-    int i = 0;
-    while (role[i] && role[i] != '\n' && role[i] != '\r' && i < 4) {
-      char c = role[i];
-      if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-      tmp[i++] = c;
-    }
-    tmp[i] = 0;
-    if (i >= 2) memcpy(cfg.role, tmp, sizeof(cfg.role));
+  if (!role) {
+    loadRoleFromPrefs();
+    return;
   }
+  role += 5;
+  char tmp[5];
+  int i = 0;
+  while (role[i] && role[i] != '\n' && role[i] != '\r' && i < 4) {
+    char c = role[i];
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    tmp[i++] = c;
+  }
+  tmp[i] = 0;
+  if (i >= 2) memcpy(cfg.role, tmp, sizeof(cfg.role));
 }
 
 static void printHelp() {
@@ -202,6 +246,12 @@ static void handleLine(MyMesh& mesh, char* text) {
     strncpy(prefs->node_name, name, sizeof(prefs->node_name) - 1);
     prefs->node_name[sizeof(prefs->node_name) - 1] = 0;
     mesh.savePrefs();
+    uint8_t stored[32];
+    memset(stored, 0, sizeof(stored));
+    memcpy(stored, prefs->node_name, strlen(prefs->node_name));
+    if (!patchNewPrefs(4, stored, 32)) {
+      Serial.println("name is set until reboot; the settings file could not be updated");
+    }
     Serial.printf("name %s\n", prefs->node_name);
     if (strlen(prefs->node_name) > 12) {
       Serial.println("keep the callsign near 12 characters so the fix still fits");
