@@ -84,8 +84,9 @@ void TakConfig::applyPreset(const char* name) {
 bool TakConfig::load() {
   setDefaults();
   // Read-link certificate from builds that had TAK -> mesh chat.
-  SPIFFS.remove("/tak/rx-client.pem");
-  SPIFFS.remove("/tak/rx-client.key");
+  for (const char* old : {"/tak/rx-client.pem", "/tak/rx-client.key"}) {
+    if (SPIFFS.exists(old)) SPIFFS.remove(old);
+  }
   if (!SPIFFS.exists("/tak/config.bin")) {
     // Keep the fixed SoftAP password from setDefaults() ("meshcoretak")
     return false;

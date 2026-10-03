@@ -57,7 +57,7 @@ void MyMesh::applyChannelsFromConfig() {
       setChannel(i, d);
       ChannelDetails set;
       getChannel(i, set);
-      Serial.printf("[CHAT] ch%d '%s' (ch#%02x) <-> TAK room '%s'\n", i, c.name, set.channel.hash[0], c.room);
+      Serial.printf("[CHAT] ch%d '%s' (ch#%02x) -> TAK room '%s'\n", i, c.name, set.channel.hash[0], c.room);
     } else {
       setChannel(i, d);  // all-zero key: its MAC never validates, so the slot hears nothing
     }
