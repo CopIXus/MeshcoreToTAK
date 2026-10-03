@@ -63,21 +63,37 @@ static void printFiles() {
   root.close();
 }
 
-// Advert blobs and the contact list are caches. This radio's SPIFFS has no
-// spare room, so those are removed before the callsign is written back.
+static bool cacheFile(const char* name, bool drop_contacts) {
+  if (!name || keptFile(name)) return false;
+  if (strstr(name, "adv_blob") || strstr(name, "/bl") || (drop_contacts && strstr(name, "contacts"))) return true;
+  const char* base = strrchr(name, '/');
+  base = base ? base + 1 : name;
+  int n = 0;
+  for (; base[n]; n++) {
+    char c = base[n];
+    bool hex = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
+    if (!hex) return false;
+  }
+  return n == 16;
+}
+
+// Advert blobs fill this radio's SPIFFS, so a settings write cannot open.
+// Those cached files are removed until there is room. Channels and identity stay.
 static void makeRoom(bool drop_contacts) {
-  char names[24][40];
-  int count = 0;
-  File root = SPIFFS.open("/");
-  if (root) {
+  int removed = 0;
+  for (int pass = 0; pass < 30; pass++) {
+    size_t free_bytes = SPIFFS.totalBytes() - SPIFFS.usedBytes();
+    if (free_bytes >= 8192) break;
+    char paths[16][48];
+    int count = 0;
+    File root = SPIFFS.open("/");
+    if (!root) break;
     File f = root.openNextFile();
-    while (f && count < 24) {
-      const char* name = f.name();
-      bool cache = strstr(name, "adv_blob") || strstr(name, "/bl");
-      bool contacts = drop_contacts && strstr(name, "contacts");
-      if (name && !keptFile(name) && (cache || contacts)) {
-        strncpy(names[count], name, sizeof(names[0]) - 1);
-        names[count][sizeof(names[0]) - 1] = 0;
+    while (f && count < 16) {
+      const char* full = f.path();
+      if (full && !f.isDirectory() && cacheFile(full, drop_contacts)) {
+        strncpy(paths[count], full, sizeof(paths[0]) - 1);
+        paths[count][sizeof(paths[0]) - 1] = 0;
         count++;
       }
       File next = root.openNextFile();
@@ -85,12 +101,15 @@ static void makeRoom(bool drop_contacts) {
       f = next;
     }
     root.close();
+    if (count == 0) break;
+    int removed_now = 0;
+    for (int i = 0; i < count; i++) {
+      if (SPIFFS.remove(paths[i]) || SPIFFS.rmdir(paths[i])) removed_now++;
+    }
+    removed += removed_now;
+    if (removed_now == 0) break;
   }
-  for (int i = 0; i < count; i++) {
-    char path[48];
-    snprintf(path, sizeof(path), "%s%s", names[i][0] == '/' ? "" : "/", names[i]);
-    if (SPIFFS.remove(path)) Serial.printf("removed %s to free settings space\n", path);
-  }
+  if (removed > 0) Serial.printf("removed %d cached files to free settings space\n", removed);
 }
 
 static void putBytes(uint8_t*& w, const void* src, size_t n) {
@@ -153,16 +172,31 @@ static bool writePrefsFile(NodePrefs* prefs) {
   return ok;
 }
 
-static bool saveSettings(NodePrefs* prefs) {
+static bool writeTrackerCfg(NodePrefs* prefs) {
+  char body[160];
+  int n = snprintf(body, sizeof(body), "ch=%u\nrole=%s\nname=%s\nmv=%u\nstill=%u\nstale=%u\n",
+                   (unsigned)cfg.channel, cfg.role, prefs->node_name,
+                   (unsigned)cfg.motion.move_interval_s,
+                   (unsigned)cfg.motion.stationary_interval_s,
+                   (unsigned)cfg.motion.stale_min_s);
+  if (n <= 0 || n >= (int)sizeof(body)) return false;
   File cfgf = SPIFFS.open("/tracker.cfg", "w", true);
-  if (cfgf) {
-    cfgf.printf("ch=%u\nrole=%s\nname=%s\n", (unsigned)cfg.channel, cfg.role, prefs->node_name);
-    cfgf.close();
+  if (!cfgf) {
+    SPIFFS.remove("/tracker.cfg");
+    cfgf = SPIFFS.open("/tracker.cfg", "w", true);
   }
+  if (!cfgf) return false;
+  bool ok = cfgf.write((const uint8_t*)body, (size_t)n) == (size_t)n;
+  cfgf.close();
+  return ok;
+}
+
+static bool saveSettings(NodePrefs* prefs) {
+  if (writeTrackerCfg(prefs)) return true;
   makeRoom(false);
-  if (writePrefsFile(prefs)) return true;
+  if (writeTrackerCfg(prefs)) return true;
   makeRoom(true);
-  if (writePrefsFile(prefs)) return true;
+  if (writeTrackerCfg(prefs)) return true;
   printFiles();
   return false;
 }
@@ -186,13 +220,20 @@ static void loadRoleFromPrefs() {
   prefs.close();
 }
 
+static void applySeconds(const char* buf, const char* key, uint16_t* dest) {
+  const char* p = strstr(buf, key);
+  if (!p) return;
+  int v = atoi(p + strlen(key));
+  if (v >= 5 && v <= 3600) *dest = (uint16_t)v;
+}
+
 static void loadTrackerFile(NodePrefs* prefs) {
   File f = SPIFFS.open("/tracker.cfg", "r");
   if (!f) {
     loadRoleFromPrefs();
     return;
   }
-  char buf[96];
+  char buf[160];
   int n = f.read((uint8_t*)buf, sizeof(buf) - 1);
   f.close();
   if (n <= 0) {
@@ -216,6 +257,9 @@ static void loadTrackerFile(NodePrefs* prefs) {
     int ch = atoi(slot + 3);
     if (ch >= 0 && ch < MAX_GROUP_CHANNELS) cfg.channel = (uint8_t)ch;
   }
+  applySeconds(buf, "mv=", &cfg.motion.move_interval_s);
+  applySeconds(buf, "still=", &cfg.motion.stationary_interval_s);
+  applySeconds(buf, "stale=", &cfg.motion.stale_min_s);
   if (!role) {
     loadRoleFromPrefs();
     return;
@@ -232,13 +276,25 @@ static void loadTrackerFile(NodePrefs* prefs) {
   if (i >= 2) memcpy(cfg.role, tmp, sizeof(cfg.role));
 }
 
+static uint16_t staleSeconds(uint16_t interval_s) {
+  float v = (float)interval_s * cfg.motion.stale_multiplier;
+  if (v < (float)cfg.motion.stale_min_s) v = (float)cfg.motion.stale_min_s;
+  if (v < 5.0f) v = 5.0f;
+  if (v > 3600.0f) v = 3600.0f;
+  return (uint16_t)(v + 0.5f);
+}
+
 static void printHelp() {
   Serial.println("USB console, 115200. Settings are kept on the device.");
   Serial.println("  status");
   Serial.println("  name <callsign>");
   Serial.println("  role <k9|veh|per|fw|ems|cmd>");
+  Serial.println("  move <seconds>     how often to send while moving");
+  Serial.println("  still <seconds>    how often to send while stopped");
+  Serial.println("  stale <seconds>    minimum time the marker stays fresh");
   Serial.println("  channel <slot> <name> <key>");
   Serial.println("  track <slot>");
+  Serial.println("Seconds are 5 to 3600. The marker stays fresh for twice the send interval, or for stale when that is longer.");
   Serial.println("Key is 32 or 64 hex characters, or base64. Use the same key as the gateway.");
   Serial.println("A #name with no key uses the MeshCore hashtag channel.");
 }
@@ -250,6 +306,10 @@ static void printStatus(MyMesh& mesh) {
   ChannelDetails ch;
   bool keyed = mesh.getChannel(cfg.channel, ch) && channelKeyed(ch);
   Serial.printf("uid %s  name %s  role %s\n", id, prefs->node_name, cfg.role);
+  Serial.printf("moving every %us, marker fresh %us\n",
+                (unsigned)cfg.motion.move_interval_s, (unsigned)staleSeconds(cfg.motion.move_interval_s));
+  Serial.printf("stopped every %us, marker fresh %us\n",
+                (unsigned)cfg.motion.stationary_interval_s, (unsigned)staleSeconds(cfg.motion.stationary_interval_s));
   Serial.printf("radio %.3f MHz  SF%d  BW %.1f  CR%d\n", prefs->freq, prefs->sf, prefs->bw, prefs->cr);
   if (keyed) {
     Serial.printf("tracker slot %u  %s\n", (unsigned)cfg.channel, ch.name);
@@ -384,6 +444,33 @@ static void handleLine(MyMesh& mesh, char* text) {
     Serial.printf("role %s\n", cfg.role);
     return;
   }
+  if (strncmp(text, "move ", 5) == 0 || strcmp(text, "move") == 0 ||
+      strncmp(text, "still ", 6) == 0 || strcmp(text, "still") == 0 ||
+      strncmp(text, "stale ", 6) == 0 || strcmp(text, "stale") == 0) {
+    bool is_move = strncmp(text, "move", 4) == 0;
+    bool is_still = strncmp(text, "still", 5) == 0;
+    char* arg = text;
+    while (*arg && *arg != ' ') arg++;
+    while (*arg == ' ') arg++;
+    int v = atoi(arg);
+    const char* what = is_move ? "move" : (is_still ? "still" : "stale");
+    if (!arg[0] || v < 5 || v > 3600) {
+      Serial.printf("%s is 5 to 3600 seconds\n", what);
+      return;
+    }
+    if (is_move) cfg.motion.move_interval_s = (uint16_t)v;
+    else if (is_still) cfg.motion.stationary_interval_s = (uint16_t)v;
+    else cfg.motion.stale_min_s = (uint16_t)v;
+    motion.setConfig(cfg.motion);
+    if (!saveSettings(mesh.getNodePrefs())) {
+      Serial.println("timing is set until reboot; the settings file could not be updated");
+    }
+    Serial.printf("moving every %us, marker fresh %us\n",
+                  (unsigned)cfg.motion.move_interval_s, (unsigned)staleSeconds(cfg.motion.move_interval_s));
+    Serial.printf("stopped every %us, marker fresh %us\n",
+                  (unsigned)cfg.motion.stationary_interval_s, (unsigned)staleSeconds(cfg.motion.stationary_interval_s));
+    return;
+  }
   if (strncmp(text, "track ", 6) == 0 || strcmp(text, "track") == 0) {
     char* arg = text + 5;
     while (*arg == ' ') arg++;
@@ -430,7 +517,7 @@ static void handleLine(MyMesh& mesh, char* text) {
       mesh::Utils::sha256(ch.channel.secret, 16, (const uint8_t*)name, (int)strlen(name));
       key_len = 16;
     } else {
-      Serial.println("private channel needs a key. Example: channel 1 TNTAK <32 hex chars>");
+      Serial.println("private channel needs a key. Example: channel 1 Track <32 hex chars>");
       return;
     }
     if (key_len == 16) memset(ch.channel.secret + 16, 0, 16);

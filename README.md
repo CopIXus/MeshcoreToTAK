@@ -27,11 +27,11 @@ Only adverts that carry a usable GPS position are considered. Repeaters that onl
 
 You can add **up to 8 filters**. Each one has its own match rule and its own CoT style, so different units on the same mesh can show up as different icons and colors.
 
-![Three filters: Fire starts with TNTAK_FIRE_ and is a red truck, EMS starts with TNTAK_EMS_ and is green, and a node that matches nothing is not sent.](images/unit-filters.jpg)
+![Three filters: Fire starts with FIRE- and is a red truck, EMS starts with EMS- and is green, and a node that matches nothing is not sent.](images/unit-filters.jpg)
 
-- **Match.** Each filter is one of **Starts with**, **Ends with**, or **Contains**. The text can list several values separated by commas (`TNTAK_FIRE_, FIRE-`). Matching ignores case.
+- **Match.** Each filter is one of **Starts with**, **Ends with**, or **Contains**. The text can list several values separated by commas (`FIRE-, ENGINE-`). Matching ignores case.
 - **Order.** Filters run from top to bottom. The first enabled filter that matches wins, so a specific rule can sit above a broader one.
-- **Style.** Each filter has its own 2525 symbol, TAK Default iconset icon, or spot-map dot, plus color, opacity, remarks, how, and archive. `TNTAK_FIRE_` can be a red vehicle while `TNTAK_EMS_` is green.
+- **Style.** Each filter has its own 2525 symbol, TAK Default iconset icon, or spot-map dot, plus color, opacity, remarks, how, and archive. `FIRE-` can be a red vehicle while `EMS-` is green.
 - **Callsign.** A filter can strip the matched start or end text from the name TAK shows. A "contains" rule is not stripped.
 - **Everything else.** Nodes that match no filter use the default style when **Send unmatched MeshCore units** is on. When that switch is off, they are not sent, and a marker that was already on the map is removed.
 
@@ -123,7 +123,7 @@ Turn **tracker parsing** on for that private channel and use the same channel ke
 
 An unknown role uses that channel's fallback style. A per-id row can change one tracker's callsign or picture without changing the radio.
 
-The MeshCore Android app can set the tracker's name and its channel. It cannot set the role, and nobody types the `!MT1` text. Role, and a callsign you need kept after reboot, are set from the radio's USB console at 115200 baud (`name`, `role`, `channel`, `status`). The radio's Tracker screen shows the role, the channel, and the last fix it sent. Radio setup is written up in [MeshCoreTracker](https://github.com/CopIXus/MeshCoreTracker). The T-Beam firmware in this repository is `Tbeam_SX1276_meshcore_tracker` or `Tbeam_SX1262_meshcore_tracker`.
+The MeshCore Android app can set the tracker's name and its channel. It has no command for the role, the send interval, or how long the marker stays fresh. Those are set from the radio's USB console at 115200 baud: `role`, `move`, `still`, `stale`, `name`, `channel`, and `status`. The radio's Tracker screen shows the role, the channel, and the last fix it sent. Radio setup is written up in [MeshCoreTracker](https://github.com/CopIXus/MeshCoreTracker). The T-Beam firmware in this repository is `Tbeam_SX1276_meshcore_tracker` or `Tbeam_SX1262_meshcore_tracker`.
 
 ## Device controls
 
