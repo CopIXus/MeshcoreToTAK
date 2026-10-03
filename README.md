@@ -106,6 +106,25 @@ Channel keys are typed on the setup page and stored only on the device. The API 
 
 Any MeshCore node that puts its location in adverts will appear: a T-Beam, or a companion radio with GPS and advert location sharing on. A short advert interval keeps a moving tracker current.
 
+### Tracker channel
+
+A GPS tracker can also send a short `!MT1` fix on one private channel instead of putting the live position in its advert. The radio sends a stable id, a role such as `fw`, and the fix. The callsign is the MeshCore sender name. This gateway paints the marker. Color, icon, and CoT type are not in the radio message.
+
+Turn **tracker parsing** on for that private channel and use the same channel key as the radio. Parsing stays off until that box is checked, including after a firmware update. One channel can carry a K9, a vehicle, a person, and a fire unit. The role on the radio selects the picture:
+
+| Role | Asset | Color |
+|---|---|---|
+| `k9` | K9 | `#0010EB` |
+| `veh` | Vehicle | `#F59E0B` |
+| `per` | Person | `#22C55E` |
+| `fw` | Fire | `#EF4444` |
+| `ems` | EMS | `#F97316` |
+| `cmd` | Command | `#A855F7` |
+
+An unknown role uses that channel's fallback style. A per-id row can change one tracker's callsign or picture without changing the radio.
+
+The MeshCore Android app can set the tracker's name and its channel. It cannot set the role, and nobody types the `!MT1` text. Role, and a callsign you need kept after reboot, are set from the radio's USB console at 115200 baud (`name`, `role`, `channel`, `status`). The radio's Tracker screen shows the role, the channel, and the last fix it sent. Radio setup is written up in [MeshCoreTracker](https://github.com/CopIXus/MeshCoreTracker). The T-Beam firmware in this repository is `Tbeam_SX1276_meshcore_tracker` or `Tbeam_SX1262_meshcore_tracker`.
+
 ## Device controls
 
 - **Button.** A click cycles the OLED pages. Holding PRG for 3 seconds opens the setup access point **`MeshCore-TAK-Setup`** for 10 minutes, even while the gateway is on Wi-Fi.

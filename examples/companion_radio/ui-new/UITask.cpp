@@ -2,6 +2,9 @@
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
+#ifdef MESHCORE_TRACKER
+#include "../../meshcore_tracker/TrackerBridge.h"
+#endif
 #ifdef WIFI_SSID
   #include <WiFi.h>
 #endif
@@ -93,6 +96,9 @@ class HomeScreen : public UIScreen {
     ADVERT,
 #if ENV_INCLUDE_GPS == 1
     GPS,
+#endif
+#ifdef MESHCORE_TRACKER
+    TRACKER,
 #endif
 #if UI_SENSORS_PAGE == 1
     SENSORS,
@@ -347,6 +353,45 @@ public:
         y = y + 12;
       }
 #endif
+#ifdef MESHCORE_TRACKER
+    } else if (_page == HomePage::TRACKER) {
+      TrackerScreenInfo info;
+      trackerBridgeCopyStatus(the_mesh, &info);
+      char buf[40];
+      int y = 18;
+      const char* kind = "role";
+      if (strcmp(info.role, "fw") == 0) kind = "Fire";
+      else if (strcmp(info.role, "k9") == 0) kind = "K9";
+      else if (strcmp(info.role, "veh") == 0) kind = "Vehicle";
+      else if (strcmp(info.role, "per") == 0) kind = "Person";
+      else if (strcmp(info.role, "ems") == 0) kind = "EMS";
+      else if (strcmp(info.role, "cmd") == 0) kind = "Command";
+      display.setColor(UIColor::primary_txt);
+      snprintf(buf, sizeof(buf), "%s  %s", kind, info.keyed ? info.channel : "no key");
+      display.drawTextLeftAlign(0, y, buf);
+      y += 12;
+      display.setColor(UIColor::secondary_txt);
+      snprintf(buf, sizeof(buf), "id %s", info.uid);
+      display.drawTextLeftAlign(0, y, buf);
+      y += 12;
+      display.setColor(UIColor::primary_txt);
+      if (info.sent) {
+        snprintf(buf, sizeof(buf), "%.5f %.5f", info.lat, info.lon);
+      } else {
+        snprintf(buf, sizeof(buf), "no fix sent");
+      }
+      display.drawTextLeftAlign(0, y, buf);
+      y += 12;
+      display.setColor(UIColor::secondary_txt);
+      if (info.sent) {
+        snprintf(buf, sizeof(buf), "sent %lus  q%lu", (unsigned long)info.age_s, (unsigned long)info.sequence);
+      } else if (!info.keyed) {
+        snprintf(buf, sizeof(buf), "set a channel");
+      } else {
+        snprintf(buf, sizeof(buf), "waiting for GPS");
+      }
+      display.drawTextLeftAlign(0, y, buf);
+#endif
 #if UI_SENSORS_PAGE == 1
     } else if (_page == HomePage::SENSORS) {
       int y = 18;
@@ -433,6 +478,9 @@ public:
         display.drawTextCentered(display.width() / 2, 64 - 11, "hibernate:" PRESS_LABEL);
       }
     }
+#ifdef MESHCORE_TRACKER
+    if (_page == HomePage::TRACKER) return 1000;
+#endif
     return 5000;   // next render after 5000 ms
   }
 
@@ -446,6 +494,11 @@ public:
       if (_page == HomePage::RECENT) {
         _task->showAlert("Recent adverts", 800);
       }
+#ifdef MESHCORE_TRACKER
+      if (_page == HomePage::TRACKER) {
+        _task->showAlert("Tracker", 800);
+      }
+#endif
       return true;
     }
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {

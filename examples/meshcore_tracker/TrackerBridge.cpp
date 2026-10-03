@@ -15,6 +15,11 @@ static uint32_t next_sample_ms = 0;
 static bool announced = false;
 static char line[160];
 static uint8_t line_len = 0;
+static bool ever_sent = false;
+static double sent_lat = 0;
+static double sent_lon = 0;
+static uint32_t sent_seq = 0;
+static uint32_t sent_ms = 0;
 
 static bool channelKeyed(const ChannelDetails& ch) {
   for (int i = 0; i < 32; i++) {
@@ -38,31 +43,128 @@ static int batteryPercent() {
   return pct;
 }
 
-// This radio's SPIFFS is full, so a new file cannot be created. The companion
-// settings already live in /new_prefs. Role uses the 4 unused pad bytes at
-// offset 36. The callsign is the node name at offset 4.
-static bool patchNewPrefs(int offset, const uint8_t* data, int len) {
-  File f = SPIFFS.open("/new_prefs", "r+");
+static bool keptFile(const char* name) {
+  return strstr(name, "identity") || strstr(name, "_main.id") || strstr(name, "channels2")
+      || strstr(name, "new_prefs") || strstr(name, "prefs.json");
+}
+
+static void printFiles() {
+  Serial.printf("SPIFFS %u of %u bytes used\n",
+                (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes());
+  File root = SPIFFS.open("/");
+  if (!root) return;
+  File f = root.openNextFile();
+  while (f) {
+    Serial.printf("  %s %u\n", f.name(), (unsigned)f.size());
+    File next = root.openNextFile();
+    f.close();
+    f = next;
+  }
+  root.close();
+}
+
+// Advert blobs and the contact list are caches. This radio's SPIFFS has no
+// spare room, so those are removed before the callsign is written back.
+static void makeRoom(bool drop_contacts) {
+  char names[24][40];
+  int count = 0;
+  File root = SPIFFS.open("/");
+  if (root) {
+    File f = root.openNextFile();
+    while (f && count < 24) {
+      const char* name = f.name();
+      bool cache = strstr(name, "adv_blob") || strstr(name, "/bl");
+      bool contacts = drop_contacts && strstr(name, "contacts");
+      if (name && !keptFile(name) && (cache || contacts)) {
+        strncpy(names[count], name, sizeof(names[0]) - 1);
+        names[count][sizeof(names[0]) - 1] = 0;
+        count++;
+      }
+      File next = root.openNextFile();
+      f.close();
+      f = next;
+    }
+    root.close();
+  }
+  for (int i = 0; i < count; i++) {
+    char path[48];
+    snprintf(path, sizeof(path), "%s%s", names[i][0] == '/' ? "" : "/", names[i]);
+    if (SPIFFS.remove(path)) Serial.printf("removed %s to free settings space\n", path);
+  }
+}
+
+static void putBytes(uint8_t*& w, const void* src, size_t n) {
+  memcpy(w, src, n);
+  w += n;
+}
+
+static bool writePrefsFile(NodePrefs* prefs) {
+  if (prefs->ble_pin == 0) prefs->ble_pin = 123456;
+  uint8_t buf[160];
+  memset(buf, 0, sizeof(buf));
+  uint8_t* w = buf;
+  putBytes(w, &prefs->airtime_factor, sizeof(float));
+  putBytes(w, prefs->node_name, sizeof(prefs->node_name));
+  uint8_t role[4];
+  memset(role, 0, sizeof(role));
+  size_t role_len = strlen(cfg.role);
+  if (role_len > 4) role_len = 4;
+  memcpy(role, cfg.role, role_len);
+  putBytes(w, role, 4);
+  putBytes(w, &prefs->node_lat, sizeof(prefs->node_lat));
+  putBytes(w, &prefs->node_lon, sizeof(prefs->node_lon));
+  putBytes(w, &prefs->freq, sizeof(prefs->freq));
+  putBytes(w, &prefs->sf, sizeof(prefs->sf));
+  putBytes(w, &prefs->cr, sizeof(prefs->cr));
+  putBytes(w, &prefs->_client_repeat, sizeof(prefs->_client_repeat));
+  putBytes(w, &prefs->manual_add_contacts, sizeof(prefs->manual_add_contacts));
+  putBytes(w, &prefs->bw, sizeof(prefs->bw));
+  putBytes(w, &prefs->tx_power_dbm, sizeof(prefs->tx_power_dbm));
+  putBytes(w, &prefs->telemetry_mode_base, sizeof(prefs->telemetry_mode_base));
+  putBytes(w, &prefs->telemetry_mode_loc, sizeof(prefs->telemetry_mode_loc));
+  putBytes(w, &prefs->telemetry_mode_env, sizeof(prefs->telemetry_mode_env));
+  putBytes(w, &prefs->rx_delay_base, sizeof(prefs->rx_delay_base));
+  putBytes(w, &prefs->advert_loc_policy, sizeof(prefs->advert_loc_policy));
+  putBytes(w, &prefs->multi_acks, sizeof(prefs->multi_acks));
+  putBytes(w, &prefs->path_hash_mode, sizeof(prefs->path_hash_mode));
+  uint8_t zero = 0;
+  putBytes(w, &zero, 1);
+  putBytes(w, &prefs->ble_pin, sizeof(prefs->ble_pin));
+  putBytes(w, &prefs->buzzer_quiet, sizeof(prefs->buzzer_quiet));
+  putBytes(w, &prefs->gps_enabled, sizeof(prefs->gps_enabled));
+  putBytes(w, &prefs->gps_interval, sizeof(prefs->gps_interval));
+  putBytes(w, &prefs->autoadd_config, sizeof(prefs->autoadd_config));
+  putBytes(w, &prefs->autoadd_max_hops, sizeof(prefs->autoadd_max_hops));
+  putBytes(w, &prefs->rx_boosted_gain, sizeof(prefs->rx_boosted_gain));
+  putBytes(w, prefs->default_scope_name, sizeof(prefs->default_scope_name));
+  putBytes(w, prefs->default_scope_key, sizeof(prefs->default_scope_key));
+  size_t n = (size_t)(w - buf);
+
+  File f = SPIFFS.open("/new_prefs", "w", true);
   if (!f) return false;
-  bool ok = f.seek(offset) && f.write(data, len) == (size_t)len;
+  bool ok = f.write(buf, n) == n;
+  f.close();
+  if (!ok) return false;
+  f = SPIFFS.open("/new_prefs", "r");
+  if (!f) return false;
+  uint8_t check[32];
+  ok = f.seek(4) && f.read(check, 32) == 32 && memcmp(check, prefs->node_name, 32) == 0;
   f.close();
   return ok;
 }
 
-static void saveTrackerFile() {
-  File f = SPIFFS.open("/tracker.cfg", "w", true);
-  if (f) {
-    f.printf("ch=%u\nrole=%s\n", (unsigned)cfg.channel, cfg.role);
-    f.close();
-    return;
+static bool saveSettings(NodePrefs* prefs) {
+  File cfgf = SPIFFS.open("/tracker.cfg", "w", true);
+  if (cfgf) {
+    cfgf.printf("ch=%u\nrole=%s\nname=%s\n", (unsigned)cfg.channel, cfg.role, prefs->node_name);
+    cfgf.close();
   }
-  uint8_t role[4];
-  memset(role, 0, sizeof(role));
-  memcpy(role, cfg.role, strlen(cfg.role) < 4 ? strlen(cfg.role) : 4);
-  if (!patchNewPrefs(36, role, 4)) {
-    Serial.printf("could not save role (SPIFFS %u of %u bytes used)\n",
-                  (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes());
-  }
+  makeRoom(false);
+  if (writePrefsFile(prefs)) return true;
+  makeRoom(true);
+  if (writePrefsFile(prefs)) return true;
+  printFiles();
+  return false;
 }
 
 static void loadRoleFromPrefs() {
@@ -84,13 +186,13 @@ static void loadRoleFromPrefs() {
   prefs.close();
 }
 
-static void loadTrackerFile() {
+static void loadTrackerFile(NodePrefs* prefs) {
   File f = SPIFFS.open("/tracker.cfg", "r");
   if (!f) {
     loadRoleFromPrefs();
     return;
   }
-  char buf[64];
+  char buf[96];
   int n = f.read((uint8_t*)buf, sizeof(buf) - 1);
   f.close();
   if (n <= 0) {
@@ -98,6 +200,16 @@ static void loadTrackerFile() {
     return;
   }
   buf[n] = 0;
+  char* saved_name = strstr(buf, "name=");
+  if (prefs && saved_name) {
+    saved_name += 5;
+    int nlen = 0;
+    while (saved_name[nlen] && saved_name[nlen] != '\n' && saved_name[nlen] != '\r' && nlen < (int)sizeof(prefs->node_name) - 1) {
+      prefs->node_name[nlen] = saved_name[nlen];
+      nlen++;
+    }
+    prefs->node_name[nlen] = 0;
+  }
   char* role = strstr(buf, "role=");
   char* slot = strstr(buf, "ch=");
   if (slot) {
@@ -245,11 +357,7 @@ static void handleLine(MyMesh& mesh, char* text) {
     NodePrefs* prefs = mesh.getNodePrefs();
     strncpy(prefs->node_name, name, sizeof(prefs->node_name) - 1);
     prefs->node_name[sizeof(prefs->node_name) - 1] = 0;
-    mesh.savePrefs();
-    uint8_t stored[32];
-    memset(stored, 0, sizeof(stored));
-    memcpy(stored, prefs->node_name, strlen(prefs->node_name));
-    if (!patchNewPrefs(4, stored, 32)) {
+    if (!saveSettings(prefs)) {
       Serial.println("name is set until reboot; the settings file could not be updated");
     }
     Serial.printf("name %s\n", prefs->node_name);
@@ -270,7 +378,9 @@ static void handleLine(MyMesh& mesh, char* text) {
     }
     memset(cfg.role, 0, sizeof(cfg.role));
     memcpy(cfg.role, role, strlen(role));
-    saveTrackerFile();
+    if (!saveSettings(mesh.getNodePrefs())) {
+      Serial.println("role is set until reboot; the settings file could not be updated");
+    }
     Serial.printf("role %s\n", cfg.role);
     return;
   }
@@ -288,7 +398,7 @@ static void handleLine(MyMesh& mesh, char* text) {
       return;
     }
     cfg.channel = (uint8_t)slot;
-    saveTrackerFile();
+    saveSettings(mesh.getNodePrefs());
     Serial.printf("tracker slot %d %s\n", slot, ch.name);
     return;
   }
@@ -330,7 +440,7 @@ static void handleLine(MyMesh& mesh, char* text) {
     }
     mesh.saveChannels();
     cfg.channel = (uint8_t)slot;
-    saveTrackerFile();
+    saveSettings(mesh.getNodePrefs());
     Serial.printf("tracker slot %d %s, %d-byte key saved\n", slot, ch.name, key_len);
     return;
   }
@@ -353,7 +463,7 @@ static void pollConsole(MyMesh& mesh) {
 
 void trackerBridgeBegin(MyMesh& mesh) {
   cfg = trackerDefaults();
-  loadTrackerFile();
+  loadTrackerFile(mesh.getNodePrefs());
   motion.setConfig(cfg.motion);
 
   NodePrefs* prefs = mesh.getNodePrefs();
@@ -381,9 +491,9 @@ void trackerBridgeBegin(MyMesh& mesh) {
     Serial.println("radio was the EU default; set to 910.525 MHz SF7");
   }
   mesh.applyGpsPrefs();
-  if (changed) {
-    mesh.savePrefs();
-    radio_driver.setParams(prefs->freq, prefs->bw, prefs->sf, prefs->cr);
+  if (changed) radio_driver.setParams(prefs->freq, prefs->bw, prefs->sf, prefs->cr);
+  if (!saveSettings(prefs)) {
+    Serial.println("could not store tracker settings");
   }
 
   Serial.println("MeshCoreTracker");
@@ -453,5 +563,27 @@ void trackerBridgeLoop(MyMesh& mesh) {
     return;
   }
   announced = true;
+  ever_sent = true;
+  sent_lat = report.lat;
+  sent_lon = report.lon;
+  sent_seq = report.sequence;
+  sent_ms = now_ms;
   Serial.printf("sent slot %d %s: %s\n", slot, prefs->node_name, body);
+}
+
+void trackerBridgeCopyStatus(MyMesh& mesh, TrackerScreenInfo* out) {
+  memset(out, 0, sizeof(*out));
+  memcpy(out->role, cfg.role, sizeof(out->role));
+  trackerIdFromPublicKey(mesh.self_id.pub_key, out->uid);
+  out->slot = cfg.channel;
+  ChannelDetails ch;
+  if (mesh.getChannel(cfg.channel, ch) && channelKeyed(ch)) {
+    out->keyed = true;
+    strncpy(out->channel, ch.name, sizeof(out->channel) - 1);
+  }
+  out->sent = ever_sent;
+  out->lat = sent_lat;
+  out->lon = sent_lon;
+  out->sequence = sent_seq;
+  if (ever_sent) out->age_s = (millis() - sent_ms) / 1000;
 }
