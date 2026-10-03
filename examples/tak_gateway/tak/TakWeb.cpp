@@ -15,13 +15,31 @@ extern void onChatConfigChanged();
 extern void requestMeshAdvert();
 extern unsigned long lastMeshAdvertMs();
 extern uint32_t meshAdvertsSent();
+extern TakNodes tak_nodes;
 
 static AsyncWebServer* g_server = nullptr;
 static TakWeb* g_web = nullptr;
 static TakConfig* g_cfg = nullptr;
 static TakClient* g_client = nullptr;
-static void (*g_radio_cb)() = nullptr;
 static AsyncAuthenticationMiddleware g_auth;
+
+// Handlers run on the AsyncTCP task. The radio, the mesh channel table, the send queue and the
+// TLS sessions belong to the main loop, so handlers leave these requests for TakWeb::loop().
+enum : uint32_t {
+  DO_WIFI = 1u << 0,
+  DO_RECONNECT = 1u << 1,
+  DO_RX_RESET = 1u << 2,
+  DO_RADIO = 1u << 3,
+  DO_CHAT = 1u << 4,
+  DO_ADVERT = 1u << 5,
+  DO_RESTYLE = 1u << 6,
+};
+static volatile uint32_t g_todo = 0;
+static void later(uint32_t what) { __atomic_fetch_or(&g_todo, what, __ATOMIC_SEQ_CST); }
+
+// Certificate subject / expiry for the status page, re-read after an install or removal.
+static volatile bool g_cert_info_stale = true;
+static String g_cert_cn, g_cert_exp, g_rx_cert_cn, g_rx_cert_exp;
 
 // Body callbacks run before middleware, so uploads must check credentials themselves;
 // the middleware then answers 401 once the body has been consumed.
@@ -152,7 +170,6 @@ void TakWeb::begin(TakConfig* cfg, TakClient* client, void (*on_radio_changed)()
   g_web = this;
   g_cfg = cfg;
   g_client = client;
-  g_radio_cb = on_radio_changed;
   if (!g_server) g_server = new AsyncWebServer(80);
   g_auth.setAuthType(AsyncAuthType::AUTH_DIGEST);
   g_auth.setRealm("MeshCore TAK Gateway");
@@ -375,27 +392,21 @@ void TakWeb::setupRoutes() {
         bool radio_changed = before.lora_freq != p.lora_freq || before.lora_bw != p.lora_bw ||
                              before.lora_sf != p.lora_sf || before.lora_cr != p.lora_cr;
         bool wifi_changed = strcmp(before.wifi_ssid, p.wifi_ssid) != 0 || strcmp(before.wifi_psk, p.wifi_psk) != 0;
-        if (wifi_changed && g_web) g_web->startStation();
-        if (link_changed && g_client) g_client->requestConnect();
-        if (rx_port_changed && g_client) g_client->forgetReceive();
-        if (radio_changed && g_radio_cb) g_radio_cb();
         bool chat_changed = memcmp(before.chat, p.chat, sizeof(p.chat)) != 0 ||
                             strcmp(before.chat_callsign, p.chat_callsign) != 0 ||
                             before.public_on != p.public_on || strcmp(before.public_room, p.public_room) != 0 ||
                             before.chat_lat != p.chat_lat || before.chat_lon != p.chat_lon;
-        if (chat_changed) onChatConfigChanged();
         bool advert_changed = (p.advert_on && !before.advert_on) ||
                               (p.advert_on && (strcmp(before.node_name, p.node_name) != 0 ||
                                                before.chat_lat != p.chat_lat || before.chat_lon != p.chat_lon));
-        if (advert_changed) requestMeshAdvert();
+        later((wifi_changed ? DO_WIFI : 0) | (link_changed ? DO_RECONNECT : 0) | (rx_port_changed ? DO_RX_RESET : 0) |
+              (radio_changed ? DO_RADIO : 0) | (chat_changed ? DO_CHAT : 0) | (advert_changed ? DO_ADVERT : 0) |
+              DO_RESTYLE);
         if (strcmp(before.setup_password, p.setup_password) != 0) {
           applyPassword(p.setup_password);
           pw_err += "\nWeb password changed - sign in again with the new password";
         }
 
-        if (g_client) g_client->removeFiltered();  // before markAllForResend clears the sent marks
-        extern TakNodes tak_nodes;
-        tak_nodes.markAllForResend();  // push the new styling on the next refresh tick
         String msg = link_changed ? "Saved - reconnecting to TAK" : "Saved - markers update within a few seconds";
         req->send(200, "text/plain", msg + chat_err + pw_err);
       });
@@ -486,7 +497,10 @@ void TakWeb::setupRoutes() {
         b.passphrase = jsonField(body, "key_passphrase");
         String err;
         bool ok = TakCerts::install(g_cfg, b, err);
-        if (ok && g_client) g_client->requestConnect();
+        if (ok) {
+          g_cert_info_stale = true;
+          later(DO_RECONNECT);
+        }
         req->send(ok ? 200 : 400, "text/plain", err);
       });
 
@@ -496,8 +510,9 @@ void TakWeb::setupRoutes() {
       return;
     }
     TakCerts::removeRx(g_cfg);
-    if (g_client) g_client->forgetReceive();
-    req->send(200, "text/plain", "Receive certificate removed");
+    g_cert_info_stale = true;
+    later(DO_RX_RESET);
+    req->send(200, "text/plain", "Read certificate removed");
   });
 
   g_server->on(
@@ -517,18 +532,26 @@ void TakWeb::setupRoutes() {
         String err;
         bool ok = TakCerts::installRx(g_cfg, jsonField(body, "cert"), jsonField(body, "key"),
                                       jsonField(body, "key_passphrase").c_str(), err);
-        if (ok && g_client) g_client->forgetReceive();
+        if (ok) {
+          g_cert_info_stale = true;
+          later(DO_RX_RESET);
+        }
         req->send(ok ? 200 : 400, "text/plain", err);
       });
 
-  g_server->on("/api/test", HTTP_POST, [](AsyncWebServerRequest* req) {
-    if (!g_client) {
+  // Starts a fresh connection; the page follows the result through /api/status.
+  g_server->on("/api/reconnect", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!g_client || !g_cfg) {
       req->send(500, "text/plain", "no client");
       return;
     }
-    String err;
-    bool ok = g_client->testConnection(err);
-    req->send(ok ? 200 : 400, "text/plain", err);
+    const char* why = g_client->reconnectBlocker();
+    if (why) {
+      req->send(409, "text/plain", why);
+      return;
+    }
+    later(DO_RECONNECT);
+    req->send(200, "text/plain", String("Connecting to ") + g_cfg->prefs.tak_host + ":" + g_cfg->prefs.tak_port);
   });
 
   g_server->on("/api/update/check", HTTP_POST, [](AsyncWebServerRequest* req) {
@@ -623,7 +646,6 @@ String TakWeb::statusJson() const {
   if (batt_pct < 0) batt_pct = 0;
   if (batt_pct > 100) batt_pct = 100;
 
-  extern TakNodes tak_nodes;
   const TakNodeRecord* last = tak_nodes.lastHeard();
   String last_name = last ? String(last->name) : "-";
   String last_ago = "";
@@ -646,6 +668,14 @@ String TakWeb::statusJson() const {
   j += "\"rx_port\":" + String(_cfg ? _cfg->prefs.rx_port : 0) + ",";
   j += "\"certs\":" + String(_cfg && _cfg->hasClientCerts() ? "true" : "false") + ",";
   j += "\"rx_certs\":" + String(_cfg && _cfg->hasRxCerts() ? "true" : "false") + ",";
+  if (_cfg && g_cert_info_stale) {
+    g_cert_info_stale = false;
+    TakCerts::describe(_cfg->readFile(_cfg->certPath()), g_cert_cn, g_cert_exp);
+    TakCerts::describe(_cfg->readFile(_cfg->rxCertPath()), g_rx_cert_cn, g_rx_cert_exp);
+  }
+  j += "\"cert_cn\":\"" + jsonEsc(g_cert_cn) + "\",\"cert_exp\":\"" + g_cert_exp + "\",";
+  j += "\"rx_cert_cn\":\"" + jsonEsc(g_rx_cert_cn) + "\",\"rx_cert_exp\":\"" + g_rx_cert_exp + "\",";
+  j += String("\"ap\":") + (_ap_active ? "true" : "false") + ",";
   j += "\"rx_state\":\"" + jsonEsc(String(_client ? _client->rxStateName() : "OFF")) + "\",";
   j += "\"rx_up\":" + String(_client ? _client->rxUpSeconds() : -1) + ",";
   j += "\"rx_err\":\"" + jsonEsc(String(_client ? _client->rxError() : "")) + "\",";
@@ -851,18 +881,48 @@ void TakWeb::stopAp() {
   }
 }
 
+void TakWeb::openSetupAp() {
+  _ap_hold_until = millis() + AP_HOLD_MS;
+  if (!_ap_active) startSetupAp();
+}
+
 void TakWeb::loop() {
-  // Async server needs no polling; optionally stop AP after STA up
-  static unsigned long last = 0;
-  if (millis() - last < 2000) return;
-  last = millis();
-  if (_ap_active && WiFi.status() == WL_CONNECTED) {
-    // Drop SoftAP as soon as STA is up so outbound TAK sockets route cleanly
-    static unsigned long sta_since = 0;
-    if (!sta_since) sta_since = millis();
-    if (millis() - sta_since > 5000UL) {
+  uint32_t todo = __atomic_exchange_n(&g_todo, 0, __ATOMIC_SEQ_CST);
+  if (todo & DO_WIFI) startStation();
+  if ((todo & DO_RADIO) && _on_radio_changed) _on_radio_changed();
+  if (todo & DO_CHAT) onChatConfigChanged();
+  if (todo & DO_ADVERT) requestMeshAdvert();
+  if ((todo & DO_RESTYLE) && _client) {
+    _client->removeFiltered();     // before markAllForResend clears the sent marks
+    tak_nodes.markAllForResend();  // push the new styling on the next refresh tick
+  }
+  if ((todo & DO_RECONNECT) && _client) _client->reconnect();
+  else if ((todo & DO_RX_RESET) && _client) _client->forgetReceive();
+
+  if (millis() - _last_wifi_check < 2000) return;
+  _last_wifi_check = millis();
+  if (_ap_hold_until && (long)(millis() - _ap_hold_until) >= 0) _ap_hold_until = 0;
+
+  if (WiFi.status() == WL_CONNECTED) {
+    _sta_down_since = 0;
+    // Drop the SoftAP once the LAN is up so outbound TAK sockets route cleanly
+    if (!_ap_active || _ap_hold_until) {
+      _sta_up_since = 0;
+    } else if (!_sta_up_since) {
+      _sta_up_since = millis();
+    } else if (millis() - _sta_up_since > 5000UL) {
       stopAp();
-      sta_since = 0;
+      _sta_up_since = 0;
     }
+    return;
+  }
+  _sta_up_since = 0;
+  if (!_cfg || !_cfg->hasWifi() || _ap_active) return;
+  // Saved Wi-Fi that never connects would otherwise leave the gateway unreachable.
+  if (!_sta_down_since) {
+    _sta_down_since = millis();
+  } else if (millis() - _sta_down_since > AP_FALLBACK_MS) {
+    Serial.printf("[WEB] Wi-Fi '%s' not connecting, opening the setup AP\n", _cfg->prefs.wifi_ssid);
+    startSetupAp();
   }
 }

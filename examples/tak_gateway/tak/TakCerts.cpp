@@ -4,6 +4,8 @@ extern "C" {
 #include "mbedtls/pk.h"
 #include "mbedtls/error.h"
 #include "mbedtls/version.h"
+#include "mbedtls/x509_crt.h"
+#include "mbedtls/oid.h"
 }
 
 #include <string.h>
@@ -143,7 +145,7 @@ bool install(TakConfig* cfg, const Bundle& in, String& err) {
     return false;
   }
   cfg->save();
-  err = "OK — key decrypted, CA taken from cert chain";
+  err = "Write certificate installed - connecting";
   return true;
 }
 
@@ -154,7 +156,7 @@ bool installRx(TakConfig* cfg, const String& certPem, const String& keyPem, cons
     return false;
   }
   if (!cfg->hasClientCerts()) {
-    err = "Install the publish certificate first — the receive link uses its CA";
+    err = "Install the write certificate first - the read link uses its CA";
     return false;
   }
   if (passphrase && passphrase[0]) {
@@ -166,7 +168,7 @@ bool installRx(TakConfig* cfg, const String& certPem, const String& keyPem, cons
   String cert = certPem;
   String key = keyPem;
   if (!looksLikePem(cert) || !looksLikePem(key)) {
-    err = "Need the receive client .pem and .key";
+    err = "Need the read certificate .pem and .key";
     return false;
   }
   String leaf, chain_ca;
@@ -177,7 +179,7 @@ bool installRx(TakConfig* cfg, const String& certPem, const String& keyPem, cons
     err = "SPIFFS write failed";
     return false;
   }
-  err = "OK — receive certificate installed";
+  err = "Read certificate installed";
   return true;
 }
 
@@ -185,6 +187,29 @@ void removeRx(TakConfig* cfg) {
   if (!cfg) return;
   SPIFFS.remove(cfg->rxCertPath());
   SPIFFS.remove(cfg->rxKeyPath());
+}
+
+bool describe(const String& pem, String& cn, String& expires) {
+  cn = "";
+  expires = "";
+  if (!looksLikePem(pem)) return false;
+  mbedtls_x509_crt crt;
+  mbedtls_x509_crt_init(&crt);
+  if (mbedtls_x509_crt_parse(&crt, (const unsigned char*)pem.c_str(), pem.length() + 1) < 0) {
+    mbedtls_x509_crt_free(&crt);
+    return false;
+  }
+  for (const mbedtls_x509_name* n = &crt.subject; n; n = n->next) {
+    if (n->oid.p && MBEDTLS_OID_CMP(MBEDTLS_OID_AT_CN, &n->oid) == 0) {
+      cn.concat((const char*)n->val.p, n->val.len);
+      break;
+    }
+  }
+  char d[12];
+  snprintf(d, sizeof(d), "%04d-%02d-%02d", crt.valid_to.year, crt.valid_to.mon, crt.valid_to.day);
+  expires = d;
+  mbedtls_x509_crt_free(&crt);
+  return true;
 }
 
 }  // namespace TakCerts

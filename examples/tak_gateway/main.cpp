@@ -53,11 +53,14 @@ static void handleSerial() {
         for (File f = root.openNextFile(); f; f = root.openNextFile()) Serial.printf("  %6u %s\n", (unsigned)f.size(), f.path());
       } else if (line.startsWith("factory_reset")) {
         tak_config.factoryResetNetworkAndTak();
-        Serial.println("OK factory reset (reboot recommended)");
-      } else if (line.startsWith("config ")) {
-        Serial.println("OK (use web UI for full config; serial JSON subset TBD)");
+        Serial.println("OK factory reset, restarting");
+        delay(500);
+        ESP.restart();
+      } else if (line == "ap") {
+        tak_web.openSetupAp();
+        Serial.printf("OK setup AP MeshCore-TAK-Setup pwd=%s -> http://192.168.4.1\n", tak_config.prefs.ap_password);
       } else if (line.length()) {
-        Serial.println("cmds: status | fs | factory_reset");
+        Serial.println("cmds: status | fs | ap | factory_reset");
       }
       line = "";
     } else {
@@ -113,9 +116,7 @@ void setup() {
   tak_display.begin();
 
   if (tak_config.hasWifi()) {
-    tak_web.startStation();
-    // Also raise AP briefly if first boot style — show AP if no wifi connect soon
-    tak_display.showBootAp("MeshCore-TAK-Setup", tak_config.prefs.ap_password);
+    tak_web.startStation();  // tak_web opens the setup AP if this does not connect
   } else {
     tak_web.startSetupAp();
     tak_display.showBootAp("MeshCore-TAK-Setup", tak_config.prefs.ap_password);
@@ -131,11 +132,12 @@ void loop() {
   tak_web.loop();
   tak_update.loop();
   tak_display.loop();
+  if (tak_display.takeLongPress()) tak_web.openSetupAp();
   handleSerial();
 
-  // Re-enable setup AP on medium button hold is handled in display; add WiFi reconnect
+  // Each STA retry scans channels, which drops phones on the setup AP, so retry slower while it is up.
   static unsigned long last_wifi = 0;
-  if (millis() - last_wifi > 10000) {
+  if (millis() - last_wifi > (tak_web.apActive() ? 60000UL : 10000UL)) {
     last_wifi = millis();
     if (tak_config.hasWifi() && WiFi.status() != WL_CONNECTED) {
       WiFi.reconnect();

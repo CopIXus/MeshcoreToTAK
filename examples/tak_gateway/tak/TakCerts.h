@@ -27,6 +27,9 @@ bool install(TakConfig* cfg, const Bundle& in, String& err);
 bool installRx(TakConfig* cfg, const String& certPem, const String& keyPem, const char* passphrase, String& err);
 void removeRx(TakConfig* cfg);
 
+// Subject CN and expiry (YYYY-MM-DD, UTC) of the first certificate in pem.
+bool describe(const String& pem, String& cn, String& expires);
+
 // Decrypt/prepare key in memory (used at connect time if SPIFFS still has encrypted key).
 bool preparePrivateKey(String& key_pem, const char* passphrase, String& err);
 

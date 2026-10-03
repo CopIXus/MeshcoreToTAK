@@ -83,6 +83,7 @@ size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node
   if (!dest || dest_len < 256) return 0;
   const TakCotStyle& style = TakNodes::styleFor(TakNodes::matchFilter(node.name, prefs), prefs);
   char t0[32], t1[32], call_esc[80], rem_esc[96], icon_path[TAK_ICON_LEN + 8], usericon[200];
+  char type_esc[sizeof(style.type) * 6], how_esc[sizeof(style.how) * 6];
   formatTime(now_utc, t0, sizeof(t0));
   formatTime(now_utc + (time_t)prefs.stale_sec, t1, sizeof(t1));
 
@@ -90,6 +91,8 @@ size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node
   TakNodes::callsignFor(node.name, prefs, callsign, sizeof(callsign));
   xmlEscape(callsign, call_esc, sizeof(call_esc));
   xmlEscape(style.remarks, rem_esc, sizeof(rem_esc));
+  xmlEscape(style.type, type_esc, sizeof(type_esc));
+  xmlEscape(style.how, how_esc, sizeof(how_esc));
 
   int32_t color = colorToArgb(style.marker_color, style.marker_opacity);
 
@@ -120,7 +123,7 @@ size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node
       "<takv device='MeshCore GPS Tracker' platform='MeshCore TAK Gateway' version='" TAK_GW_VERSION "'/>"
       "</detail>"
       "</event>",
-      node.uid, style.type, style.how, t0, t0, t1, node.lat, node.lon, call_esc, rem_esc, usericon,
+      node.uid, type_esc, how_esc, t0, t0, t1, node.lat, node.lon, call_esc, rem_esc, usericon,
       (long)color, (long)color, style.archived ? "<archive/>" : "");
 
   if (n < 0 || (size_t)n >= dest_len) return 0;

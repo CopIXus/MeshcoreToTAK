@@ -1,7 +1,8 @@
 // Decrypt a TAK Portal client key in the browser, then upload the clear PEM.
-// Portal keys are PKCS#8 encrypted with pbeWithSHAAnd3-KeyTripleDES-CBC (the
-// passphrase is usually atakatak). The ESP32 TLS stack has no 3DES, so the
-// working install path has always sent an already-clear key.
+// Older Portal keys are PKCS#8 pbeWithSHAAnd3-KeyTripleDES-CBC. Newer ones are
+// PBES2 (PBKDF2 + AES-256-CBC) or a traditional OpenSSL AES PEM. One passphrase
+// unlocks both the write and the read key. The ESP32 TLS stack cannot decrypt
+// these, so the page always sends an already-clear key.
 (function (root) {
   function rotl(x, n) { return ((x << n) | (x >>> (32 - n))) >>> 0; }
   function sha1(bytes) {
@@ -166,9 +167,9 @@
     return out;
   }
   function zero8() { return new Uint8Array(8); }
-  function unpad(buf) {
+  function unpad(buf, block) {
     const n = buf[buf.length - 1];
-    if (n < 1 || n > 8) throw new Error('bad padding');
+    if (n < 1 || n > (block || 8)) throw new Error('bad padding');
     for (let i = 0; i < n; i++) if (buf[buf.length - 1 - i] !== n) throw new Error('bad padding');
     return buf.slice(0, buf.length - n);
   }
@@ -242,47 +243,265 @@
   function pemWrap(label, der) {
     return '-----BEGIN ' + label + '-----\n' + b64enc(der).replace(/\n$/, '') + '\n-----END ' + label + '-----\n';
   }
-  function evpBytesToKey(password, salt) {
+  function hexBytes(s) {
+    const o = new Uint8Array(s.length / 2);
+    for (let i = 0; i < o.length; i++) o[i] = parseInt(s.substr(i * 2, 2), 16);
+    return o;
+  }
+  function hexOf(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, '0');
+    return s;
+  }
+  function readInt(buf, el) {
+    let v = 0;
+    for (let i = el.start; i < el.end; i++) v = (v * 256) + buf[i];
+    return v;
+  }
+  // OpenSSL EVP_BytesToKey, MD5, one iteration. The salt is the first 8 bytes of the IV.
+  function evpBytesToKey(password, iv, n) {
+    const salt = iv.slice(0, 8);
     const pw = [];
     for (let i = 0; i < password.length; i++) pw.push(password.charCodeAt(i) & 255);
     let d = new Uint8Array(0), out = new Uint8Array(0);
-    while (out.length < 24) {
+    while (out.length < n) {
       const buf = new Uint8Array(d.length + pw.length + salt.length);
       buf.set(d); buf.set(pw, d.length); buf.set(salt, d.length + pw.length);
       d = md5(buf);
       out = concat(out, d);
     }
-    return out.slice(0, 24);
+    return out.slice(0, n);
   }
-  function clearPortalKey(pem, password) {
-    if (!pem || pem.indexOf('ENCRYPTED') < 0) return pem;
+  function keyBlock(pem) {
     const text = pem.replace(/\r/g, '');
-    const dek = text.match(/DEK-Info:\s*DES-EDE3-CBC,([0-9A-Fa-f]+)/);
+    const enc = text.match(/-----BEGIN ENCRYPTED PRIVATE KEY-----[\s\S]*?-----END ENCRYPTED PRIVATE KEY-----/);
+    if (enc) return enc[0];
+    const rsa = text.match(/-----BEGIN RSA PRIVATE KEY-----[\s\S]*?-----END RSA PRIVATE KEY-----/);
+    if (rsa) return rsa[0];
+    const pk = text.match(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/);
+    if (pk) return pk[0];
+    return text;
+  }
+  function unsupported() {
+    throw new Error('This key uses an encryption the page cannot open. Run install_certs_to_device.py on a PC.');
+  }
+  // Browsers only expose crypto.subtle on HTTPS or localhost, and this page is served over
+  // plain HTTP, so SHA-256, PBKDF2 and AES are done here.
+  const K256 = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
+  function sha256(bytes) {
+    const n = bytes.length, words = Math.ceil((n + 9) / 64) * 16;
+    const w = new Uint32Array(words);
+    for (let i = 0; i < n; i++) w[i >> 2] |= bytes[i] << (24 - (i & 3) * 8);
+    w[n >> 2] |= 0x80 << (24 - (n & 3) * 8);
+    w[words - 2] = Math.floor(n * 8 / 0x100000000);
+    w[words - 1] = (n * 8) >>> 0;
+    const h = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+    const m = new Uint32Array(64);
+    const rotr = (x, k) => (x >>> k) | (x << (32 - k));
+    for (let i = 0; i < words; i += 16) {
+      for (let t = 0; t < 16; t++) m[t] = w[i + t];
+      for (let t = 16; t < 64; t++) {
+        const s0 = rotr(m[t - 15], 7) ^ rotr(m[t - 15], 18) ^ (m[t - 15] >>> 3);
+        const s1 = rotr(m[t - 2], 17) ^ rotr(m[t - 2], 19) ^ (m[t - 2] >>> 10);
+        m[t] = (m[t - 16] + s0 + m[t - 7] + s1) >>> 0;
+      }
+      let [a, b, c, d, e, f, g, k] = h;
+      for (let t = 0; t < 64; t++) {
+        const t1 = (k + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K256[t] + m[t]) >>> 0;
+        const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+        k = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+      }
+      h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += k;
+    }
+    const out = new Uint8Array(32);
+    h.forEach((x, i) => { out[i * 4] = x >>> 24; out[i * 4 + 1] = x >>> 16; out[i * 4 + 2] = x >>> 8; out[i * 4 + 3] = x; });
+    return out;
+  }
+  const HASHES = { 'SHA-1': sha1, 'SHA-256': sha256 };
+  function hmac(hash, key, msg) {
+    if (key.length > 64) key = hash(key);
+    const k = new Uint8Array(64);
+    k.set(key);
+    return hash(concat(k.map(b => b ^ 0x5c), hash(concat(k.map(b => b ^ 0x36), msg))));
+  }
+  async function pbkdf2(password, salt, iterations, hash, bytes) {
+    const pw = new TextEncoder().encode(password);
+    const fn = HASHES[hash];
+    if (!fn) {
+      const subtle = root.crypto && root.crypto.subtle;
+      if (!subtle) throw new Error('This key needs ' + hash + ', which the page can only use over HTTPS. Run install_certs_to_device.py on a PC.');
+      const mat = await subtle.importKey('raw', pw, 'PBKDF2', false, ['deriveBits']);
+      return new Uint8Array(await subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash }, mat, bytes * 8));
+    }
+    const out = new Uint8Array(bytes);
+    for (let blk = 1, off = 0; off < bytes; blk++) {
+      let u = hmac(fn, pw, concat(salt, Uint8Array.of(blk >>> 24, (blk >>> 16) & 255, (blk >>> 8) & 255, blk & 255)));
+      const t = u.slice();
+      for (let i = 1; i < iterations; i++) {
+        u = hmac(fn, pw, u);
+        for (let j = 0; j < t.length; j++) t[j] ^= u[j];
+      }
+      out.set(t.slice(0, Math.min(t.length, bytes - off)), off);
+      off += t.length;
+    }
+    return out;
+  }
+  const AES_S = new Uint8Array(256), AES_SI = new Uint8Array(256);
+  (function () {
+    const rotl8 = (x, k) => ((x << k) | (x >>> (8 - k))) & 255;
+    let p = 1, q = 1;
+    do {
+      p = (p ^ (p << 1) ^ (p & 0x80 ? 0x1b : 0)) & 255;
+      q ^= q << 1; q ^= q << 2; q ^= q << 4; q &= 255;
+      if (q & 0x80) q ^= 0x09;
+      AES_S[p] = q ^ rotl8(q, 1) ^ rotl8(q, 2) ^ rotl8(q, 3) ^ rotl8(q, 4) ^ 0x63;
+    } while (p !== 1);
+    AES_S[0] = 0x63;
+    for (let i = 0; i < 256; i++) AES_SI[AES_S[i]] = i;
+  })();
+  function gmul(a, b) {
+    let r = 0;
+    while (b) {
+      if (b & 1) r ^= a;
+      a = ((a << 1) ^ (a & 0x80 ? 0x1b : 0)) & 255;
+      b >>= 1;
+    }
+    return r;
+  }
+  function aesExpand(key) {
+    const nk = key.length / 4, nr = nk + 6, w = new Uint8Array(16 * (nr + 1));
+    w.set(key);
+    let rcon = 1;
+    for (let i = nk; i < 4 * (nr + 1); i++) {
+      let t = w.slice((i - 1) * 4, i * 4);
+      if (i % nk === 0) {
+        t = Uint8Array.of(AES_S[t[1]] ^ rcon, AES_S[t[2]], AES_S[t[3]], AES_S[t[0]]);
+        rcon = gmul(rcon, 2);
+      } else if (nk > 6 && i % nk === 4) {
+        t = t.map(b => AES_S[b]);
+      }
+      for (let j = 0; j < 4; j++) w[i * 4 + j] = w[(i - nk) * 4 + j] ^ t[j];
+    }
+    return { w, nr };
+  }
+  function aesDecryptBlock(inp, ks) {
+    const { w, nr } = ks, s = new Uint8Array(16), t = new Uint8Array(16);
+    for (let i = 0; i < 16; i++) s[i] = inp[i] ^ w[nr * 16 + i];
+    for (let round = nr - 1; round >= 0; round--) {
+      for (let c = 0; c < 4; c++) {
+        for (let r = 0; r < 4; r++) t[r + 4 * c] = AES_SI[s[r + 4 * ((c - r + 4) % 4)]] ^ w[round * 16 + r + 4 * c];
+      }
+      if (!round) return t;
+      for (let c = 0; c < 4; c++) {
+        const a0 = t[4 * c], a1 = t[4 * c + 1], a2 = t[4 * c + 2], a3 = t[4 * c + 3];
+        s[4 * c] = gmul(a0, 14) ^ gmul(a1, 11) ^ gmul(a2, 13) ^ gmul(a3, 9);
+        s[4 * c + 1] = gmul(a0, 9) ^ gmul(a1, 14) ^ gmul(a2, 11) ^ gmul(a3, 13);
+        s[4 * c + 2] = gmul(a0, 13) ^ gmul(a1, 9) ^ gmul(a2, 14) ^ gmul(a3, 11);
+        s[4 * c + 3] = gmul(a0, 11) ^ gmul(a1, 13) ^ gmul(a2, 9) ^ gmul(a3, 14);
+      }
+    }
+    return t;
+  }
+  async function aesCbcDecrypt(keyBytes, iv, data) {
+    if (data.length % 16) throw new Error('bad ciphertext length');
+    const ks = aesExpand(keyBytes), out = new Uint8Array(data.length);
+    let prev = iv;
+    for (let i = 0; i < data.length; i += 16) {
+      const block = data.slice(i, i + 16), p = aesDecryptBlock(block, ks);
+      for (let j = 0; j < 16; j++) out[i + j] = p[j] ^ prev[j];
+      prev = block;
+    }
+    return unpad(out, 16);
+  }
+  function cipherInfo(oidHex) {
+    if (oidHex === '60864801650304012a') return { aes: 32 };
+    if (oidHex === '608648016503040116') return { aes: 24 };
+    if (oidHex === '608648016503040102') return { aes: 16 };
+    if (oidHex === '2a864886f70d0307') return { des: 24 };
+    return null;
+  }
+  function prfHash(oidHex) {
+    if (oidHex === '2a864886f70d0207') return 'SHA-1';
+    if (oidHex === '2a864886f70d0209') return 'SHA-256';
+    if (oidHex === '2a864886f70d020a') return 'SHA-384';
+    if (oidHex === '2a864886f70d020b') return 'SHA-512';
+    return '';
+  }
+  async function decryptPbes2(derBytes, top, alg, oid, password) {
+    const params = derChild(derBytes, oid.next, alg.end);
+    const kdf = derChild(derBytes, params.start, params.end);
+    const kdfOid = derChild(derBytes, kdf.start, kdf.end);
+    if (hexOf(derBytes.slice(kdfOid.start, kdfOid.end)) !== '2a864886f70d01050c') unsupported();
+    const kdfParams = derChild(derBytes, kdfOid.next, kdf.end);
+    const saltEl = derChild(derBytes, kdfParams.start, kdfParams.end);
+    let p = saltEl.next;
+    const iterEl = derChild(derBytes, p, kdfParams.end);
+    p = iterEl.next;
+    let keyLen = 0, hash = 'SHA-1';
+    while (p < kdfParams.end) {
+      const el = derChild(derBytes, p, kdfParams.end);
+      p = el.next;
+      if (el.tag === 0x02) keyLen = readInt(derBytes, el);
+      else if (el.tag === 0x30) {
+        const prfOid = derChild(derBytes, el.start, el.end);
+        hash = prfHash(hexOf(derBytes.slice(prfOid.start, prfOid.end)));
+        if (!hash) unsupported();
+      }
+    }
+    const enc = derChild(derBytes, kdf.next, params.end);
+    const encOid = derChild(derBytes, enc.start, enc.end);
+    const info = cipherInfo(hexOf(derBytes.slice(encOid.start, encOid.end)));
+    if (!info) unsupported();
+    const ivEl = derChild(derBytes, encOid.next, enc.end);
+    const iv = derBytes.slice(ivEl.start, ivEl.end);
+    const dataEl = derChild(derBytes, alg.next, top.end);
+    const data = derBytes.slice(dataEl.start, dataEl.end);
+    const n = keyLen || info.aes || info.des;
+    const key = await pbkdf2(password || '', derBytes.slice(saltEl.start, saltEl.end), readInt(derBytes, iterEl), hash, n);
+    if (info.aes) return pemWrap('PRIVATE KEY', await aesCbcDecrypt(key, iv, data));
+    return pemWrap('PRIVATE KEY', unpad(tripleDesCbc(data, key, iv, true)));
+  }
+  async function clearPortalKey(pem, password) {
+    if (!pem || pem.indexOf('ENCRYPTED') < 0) return pem;
+    const text = keyBlock(pem);
+    const dek = text.match(/DEK-Info:\s*([A-Za-z0-9-]+),([0-9A-Fa-f]+)/);
     if (dek) {
-      const iv = new Uint8Array((dek[1].match(/../g) || []).map(h => parseInt(h, 16)));
-      const key = evpBytesToKey(password || '', iv);
-      const plain = unpad(tripleDesCbc(pemBody(text), key, iv, true));
-      return pemWrap('RSA PRIVATE KEY', plain);
+      const iv = hexBytes(dek[2]);
+      const body = pemBody(text);
+      const cipher = dek[1].toUpperCase();
+      if (cipher === 'DES-EDE3-CBC') {
+        return pemWrap('RSA PRIVATE KEY', unpad(tripleDesCbc(body, evpBytesToKey(password || '', iv, 24), iv, true)));
+      }
+      const aesLen = cipher === 'AES-256-CBC' ? 32 : cipher === 'AES-192-CBC' ? 24 : cipher === 'AES-128-CBC' ? 16 : 0;
+      if (!aesLen) unsupported();
+      return pemWrap('RSA PRIVATE KEY', await aesCbcDecrypt(evpBytesToKey(password || '', iv, aesLen), iv, body));
     }
     const derBytes = pemBody(text);
     const top = derChild(derBytes, 0, derBytes.length);
     const alg = derChild(derBytes, top.start, top.end);
     const oid = derChild(derBytes, alg.start, alg.end);
-    const oidHex = Array.from(derBytes.slice(oid.start, oid.end)).map(b => b.toString(16).padStart(2, '0')).join('');
-    if (oidHex !== '2a864886f70d010c0103') {
-      throw new Error('This key uses an encryption the page cannot open. Run install_certs_to_device.py on a PC.');
-    }
+    const oidHex = hexOf(derBytes.slice(oid.start, oid.end));
+    if (oidHex === '2a864886f70d01050d') return decryptPbes2(derBytes, top, alg, oid, password);
+    // pbeWithSHAAnd3-KeyTripleDES-CBC and the 2-key variant.
+    const desLen = oidHex === '2a864886f70d010c0103' ? 24 : oidHex === '2a864886f70d010c0104' ? 16 : 0;
+    if (!desLen) unsupported();
     const params = derChild(derBytes, oid.next, alg.end);
     const saltEl = derChild(derBytes, params.start, params.end);
     const iterEl = derChild(derBytes, saltEl.next, params.end);
     const salt = derBytes.slice(saltEl.start, saltEl.end);
-    let iter = 0;
-    for (let i = iterEl.start; i < iterEl.end; i++) iter = (iter << 8) | derBytes[i];
+    const iter = readInt(derBytes, iterEl);
     const dataEl = derChild(derBytes, alg.next, top.end);
-    const key = pkcs12(password || '', salt, iter, 1, 24);
+    const key = pkcs12(password || '', salt, iter, 1, desLen);
     const iv = pkcs12(password || '', salt, iter, 2, 8);
-    const plain = unpad(tripleDesCbc(derBytes.slice(dataEl.start, dataEl.end), key, iv, true));
-    return pemWrap('PRIVATE KEY', plain);
+    return pemWrap('PRIVATE KEY', unpad(tripleDesCbc(derBytes.slice(dataEl.start, dataEl.end), key, iv, true)));
   }
   root.clearPortalKey = clearPortalKey;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

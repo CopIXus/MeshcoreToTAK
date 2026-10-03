@@ -122,7 +122,9 @@ public:
   void begin(TakConfig* cfg, TakNodes* nodes);
   void loop();
   void requestConnect();
-  bool testConnection(String& error_out);
+  // Drops both links and starts over without backoff. Main task only.
+  void reconnect();
+  const char* reconnectBlocker() const;  // why a reconnect cannot work, or nullptr
   bool queuePoint(const TakNodeRecord& node);
   bool queueDelete(const char* uid);
   void removeFiltered();  // delete map markers for nodes the name filter now rejects
@@ -188,6 +190,10 @@ private:
   TakChatIn _in[IN_SIZE];
   int _in_head = 0, _in_count = 0;
   char _gw_uid[32] = {0};
+  bool _skip_cn = false;  // the server cert did not name "takserver"; check the CA chain only
+  static const int TAK_SEEN_CHAT = 8;
+  uint32_t _seen_chat[TAK_SEEN_CHAT] = {0};  // GeoChat messageId hashes already sent to the mesh
+  int _seen_next = 0;
   bool _presence_due = false;
   unsigned long _last_presence_ms = 0;
 

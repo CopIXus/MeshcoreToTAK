@@ -13,8 +13,11 @@ public:
   void loop();
   void showBootAp(const char* ssid, const char* password);
   void setRefs(TakConfig* cfg, TakClient* client, TakNodes* nodes);
+  // True once per button hold of LONG_PRESS_MS (the caller opens the setup AP).
+  bool takeLongPress();
 
 private:
+  static const unsigned long LONG_PRESS_MS = 3000;
   TakConfig* _cfg = nullptr;
   TakClient* _client = nullptr;
   TakNodes* _nodes = nullptr;
@@ -22,6 +25,8 @@ private:
   unsigned long _last_draw = 0;
   unsigned long _btn_down = 0;
   bool _btn_was = false;
+  bool _long_fired = false;
+  bool _long_pending = false;
   unsigned long _seen_chat_ms = 0;
 
   void draw();

@@ -96,7 +96,7 @@ void TakClient::disconnectTls() {
   }
 }
 
-static void formatTlsError(esp_tls_t* tls, const char* prefix, char* msg, size_t n) {
+static esp_err_t formatTlsError(esp_tls_t* tls, const char* prefix, char* msg, size_t n) {
   if (tls) {
     int esp_code = 0;
     int mbedtls_code = 0;
@@ -105,9 +105,10 @@ static void formatTlsError(esp_tls_t* tls, const char* prefix, char* msg, size_t
     if (mbedtls_code) mbedtls_strerror(mbedtls_code, mbed_str, sizeof(mbed_str));
     snprintf(msg, n, "%s esp=%s/%d mbed=%s", prefix ? prefix : "TLS", esp_err_to_name(err), esp_code,
              mbed_str[0] ? mbed_str : "none");
-  } else {
-    snprintf(msg, n, "%s (no tls handle)", prefix ? prefix : "TLS");
+    return err;
   }
+  snprintf(msg, n, "%s (no tls handle)", prefix ? prefix : "TLS");
+  return ESP_FAIL;
 }
 
 void TakClient::captureTlsError(const char* prefix) {
@@ -189,8 +190,8 @@ bool TakClient::openSession(void*& slot, const String& cert, const String& key, 
   cfg.clientkey_buf = (const unsigned char*)key.c_str();
   cfg.clientkey_bytes = key.length() + 1;
   // Portal server cert SAN/CN is typically "takserver", while Integrations host is an FQDN.
-  cfg.common_name = "takserver";
-  cfg.skip_common_name = false;
+  cfg.common_name = _skip_cn ? nullptr : "takserver";
+  cfg.skip_common_name = _skip_cn;
   cfg.timeout_ms = 20000;
   tls_keep_alive_cfg_t ka = {};
   ka.keep_alive_enable = true;
@@ -202,9 +203,15 @@ bool TakClient::openSession(void*& slot, const String& cert, const String& key, 
   int ret = esp_tls_conn_new_sync(_cfg->prefs.tak_host, strlen(_cfg->prefs.tak_host), port, &cfg, tls);
   if (ret != 1) {
     char msg[96];
-    formatTlsError(tls, "TLS handshake failed", msg, sizeof(msg));
+    esp_err_t why = formatTlsError(tls, "TLS handshake failed", msg, sizeof(msg));
     note(msg);
     esp_tls_conn_destroy(tls);
+    slot = nullptr;
+    // A host that never answered cannot have a name mismatch, and a second timeout stalls the mesh loop.
+    if (_skip_cn || why == ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME || why == ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST ||
+        why == ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT) {
+      return false;
+    }
     slot = esp_tls_init();
     if (!slot) {
       note("esp_tls_init failed (retry)");
@@ -222,6 +229,7 @@ bool TakClient::openSession(void*& slot, const String& cert, const String& key, 
       slot = nullptr;
       return false;
     }
+    _skip_cn = true;
   }
 
   // The handshake used a 20 s socket timeout; a read must never stall the mesh loop that long.
@@ -243,7 +251,6 @@ bool TakClient::connectTls() {
   if (!loadCertPems()) return false;
 
   setState(TakLinkState::Connecting);
-  WiFi.mode(WIFI_STA);
   IPAddress ip;
   if (WiFi.hostByName(_cfg->prefs.tak_host, ip)) {
     Serial.printf("[TAK] DNS %s -> %s\n", _cfg->prefs.tak_host, ip.toString().c_str());
@@ -466,6 +473,12 @@ static void xmlUnescape(const char* s, size_t len, char* out, size_t out_len) {
     if (cp < 0x80) out[o++] = (char)cp;
     else if (cp < 0x800) { out[o++] = 0xC0 | (cp >> 6); out[o++] = 0x80 | (cp & 0x3F); }
     else if (cp < 0x10000) { out[o++] = 0xE0 | (cp >> 12); out[o++] = 0x80 | ((cp >> 6) & 0x3F); out[o++] = 0x80 | (cp & 0x3F); }
+    else if (cp <= 0x10FFFF) {
+      out[o++] = 0xF0 | (cp >> 18);
+      out[o++] = 0x80 | ((cp >> 12) & 0x3F);
+      out[o++] = 0x80 | ((cp >> 6) & 0x3F);
+      out[o++] = 0x80 | (cp & 0x3F);
+    }
     i += el;
   }
   out[o] = 0;
@@ -881,6 +894,20 @@ void TakClient::handleEvent(const char* ev, bool proto) {
     inbound.chat_drop++;
     snprintf(inbound.note, sizeof(inbound.note), "drop blank text room='%s'", room);
     return;
+  }
+  // The publish and read links can both be sent the same GeoChat; it must reach the mesh once.
+  char mid[64];
+  if (tagAttr(chat, "messageId", mid, sizeof(mid)) && mid[0]) {
+    uint32_t h = 2166136261u;
+    for (const char* p = mid; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
+    for (uint32_t seen : _seen_chat) {
+      if (seen == h) {
+        snprintf(inbound.note, sizeof(inbound.note), "ignored duplicate room='%s'", room);
+        return;
+      }
+    }
+    _seen_chat[_seen_next] = h;
+    _seen_next = (_seen_next + 1) % TAK_SEEN_CHAT;
   }
   _in_count++;
   snprintf(inbound.note, sizeof(inbound.note), "%s %s -> ch%d", proto ? "protobuf" : "xml", sender, ch);
@@ -1301,54 +1328,23 @@ void TakClient::bumpBackoff() {
   disconnectTls();
 }
 
-bool TakClient::testConnection(String& error_out) {
-  error_out = "";
-  if (WiFi.status() != WL_CONNECTED) {
-    error_out = "Wi-Fi not connected";
-    return false;
-  }
-  if (!_cfg->hasTakHost()) {
-    error_out = "TAK host not set";
-    return false;
-  }
-  if (!_cfg->hasClientCerts()) {
-    error_out = "Upload CA, client cert, and key";
-    return false;
-  }
-  if (!nowUtc()) {
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-    for (int i = 0; i < 30 && !nowUtc(); i++) delay(200);
-    if (!nowUtc()) {
-      error_out = "NTP failed";
-      return false;
-    }
-  }
+const char* TakClient::reconnectBlocker() const {
+  if (!_cfg) return "not ready";
+  if (!_cfg->prefs.enabled) return "Turn on Send to TAK Server and save first";
+  if (!_cfg->hasWifi()) return "Wi-Fi is not set up";
+  if (!_cfg->hasTakHost()) return "TAK host is not set";
+  if (!_cfg->hasClientCerts()) return "Install the write certificate first";
+  return nullptr;
+}
 
-  // Run a one-shot connect (uses same path as runtime)
-  bool was_connected = (_state == TakLinkState::Connected);
-  if (!connectTls()) {
-    error_out = _last_error;
-    bumpBackoff();
-    return false;
-  }
-  char xml[512];
-  size_t n = TakCot::buildDelete(xml, sizeof(xml), "meshcore-test-ping", nowUtc());
-  if (n) {
-    int w = esp_tls_conn_write(TLS, xml, n);
-    if (w < 0) {
-      captureTlsError("TLS write failed");
-      error_out = _last_error;
-      disconnectTls();
-      return false;
-    }
-  }
-  drainInbound();
-  if (!was_connected) {
-    // Leave connected for normal operation after a successful test
-  }
-  error_out = "OK";
-  setState(TakLinkState::Connected);
-  return true;
+void TakClient::reconnect() {
+  disconnectRx();
+  disconnectTls();
+  _rxlink.backoff_ms = 1000;
+  _rxlink.backoff_until = 0;
+  if (_rxlink.state == TakLinkState::Backoff) _rxlink.state = TakLinkState::Disabled;
+  setError("");
+  requestConnect();
 }
 
 void TakClient::loop() {

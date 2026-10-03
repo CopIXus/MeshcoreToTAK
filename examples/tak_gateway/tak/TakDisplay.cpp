@@ -1,4 +1,5 @@
 #include "TakDisplay.h"
+#include "TakText.h"
 #include <WiFi.h>
 #include <target.h>
 
@@ -71,28 +72,42 @@ void TakDisplay::drawTak() {
 #endif
 }
 
+bool TakDisplay::takeLongPress() {
+  bool p = _long_pending;
+  _long_pending = false;
+  return p;
+}
+
 void TakDisplay::drawWifi() {
 #ifdef DISPLAY_CLASS
-  char line[32];
+  char line[40];
+  bool sta = WiFi.status() == WL_CONNECTED;
   display.startFrame();
   drawHeader("WIFI");
-  display.setCursor(0, ROW[0]);
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WiFi.getMode() & WIFI_AP) {
+    display.drawTextEllipsized(0, ROW[0], display.width(), "MeshCore-TAK-Setup");
+    snprintf(line, sizeof(line), "PWD:%s", (_cfg && _cfg->prefs.ap_password[0]) ? _cfg->prefs.ap_password : "?");
+    display.drawTextEllipsized(0, ROW[1], display.width(), line);
+    display.setCursor(0, ROW[2]);
+    display.print("192.168.4.1");
+    if (sta) snprintf(line, sizeof(line), "LAN %s", WiFi.localIP().toString().c_str());
+    else if (_cfg && _cfg->hasWifi()) snprintf(line, sizeof(line), "no link: %s", _cfg->prefs.wifi_ssid);
+    else line[0] = 0;
+    display.drawTextEllipsized(0, ROW[3], display.width(), line);
+  } else if (sta) {
     display.drawTextEllipsized(0, ROW[0], display.width(), WiFi.SSID().c_str());
     display.setCursor(0, ROW[1]);
     display.print(WiFi.localIP().toString().c_str());
     snprintf(line, sizeof(line), "RSSI %d", WiFi.RSSI());
     display.setCursor(0, ROW[2]);
     display.print(line);
-  } else if (WiFi.getMode() & WIFI_AP) {
-    display.print("MeshCore-TAK-Setup");
-    display.setCursor(0, ROW[1]);
-    display.print("PWD:");
-    display.print((_cfg && _cfg->prefs.ap_password[0]) ? _cfg->prefs.ap_password : "?");
-    display.setCursor(0, ROW[2]);
-    display.print("192.168.4.1");
   } else {
-    display.print("disconnected");
+    snprintf(line, sizeof(line), "joining %s", _cfg ? _cfg->prefs.wifi_ssid : "");
+    display.drawTextEllipsized(0, ROW[0], display.width(), line);
+    display.setCursor(0, ROW[2]);
+    display.print("hold button 3s:");
+    display.setCursor(0, ROW[3]);
+    display.print("open setup AP");
   }
   display.endFrame();
 #endif
@@ -174,14 +189,15 @@ void TakDisplay::drawChat() {
   display.drawTextEllipsized(0, ROW[0], display.width(), line);
   const char* last = _client->chat.last();
   if (last[0]) {
-    // wrap the last message over the remaining rows, 21 chars each
-    size_t len = strlen(last);
-    for (int r = 1; r < 4 && (size_t)(r - 1) * 21 < len; r++) {
+    // wrap the last message over the remaining rows, 21 bytes each, never splitting a character
+    const char* p = last;
+    for (int r = 1; r < 4 && *p; r++) {
       char seg[22];
-      strncpy(seg, last + (r - 1) * 21, 21);
-      seg[21] = 0;
+      utf8Copy(seg, sizeof(seg), p);
+      if (!seg[0]) break;
       display.setCursor(0, ROW[r]);
       display.print(seg);
+      p += strlen(seg);
     }
   }
   display.endFrame();
@@ -203,15 +219,17 @@ void TakDisplay::loop() {
   bool down = user_btn.isPressed();
   if (down && !_btn_was) {
     _btn_down = millis();
+    _long_fired = false;
   }
-  if (!down && _btn_was) {
-    unsigned long held = millis() - _btn_down;
-    if (held >= 5000) {
-      Serial.println("[UI] LONG PRESS — serial: factory_reset");
-    } else if (held >= 50) {
-      _page = (Page)((_page + 1) % PageCount);
-      draw();
-    }
+  if (down && !_long_fired && millis() - _btn_down >= LONG_PRESS_MS) {
+    _long_fired = true;
+    _long_pending = true;
+    _page = PageWifi;
+    draw();
+  }
+  if (!down && _btn_was && !_long_fired && millis() - _btn_down >= 50) {
+    _page = (Page)((_page + 1) % PageCount);
+    draw();
   }
   _btn_was = down;
 

@@ -14,7 +14,7 @@ header h1{font-size:1.05rem;margin:0;font-weight:700;flex:1}
 font-size:.75rem;font-weight:700;letter-spacing:.03em}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
 .dot.ok{background:var(--acc)}.dot.bad{background:var(--bad)}.dot.warn{background:var(--warn)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px;scroll-margin-top:84px}
 .card>h2{margin:0 0 12px;font-size:.9rem;font-weight:700;display:flex;align-items:center;gap:8px}
 .card>h2 small{margin-left:auto;font-weight:600;color:var(--muted);font-size:.72rem}
 h3{font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:16px 0 8px;font-weight:700}
@@ -142,22 +142,91 @@ border-radius:8px;margin-bottom:6px;font-size:.85rem}
 .frow.off{opacity:.55}
 dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--text);padding:16px;max-width:720px;width:92vw;max-height:88vh;overflow:auto}
 dialog::backdrop{background:rgba(6,10,16,.7)}
+.bd{font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:999px;background:#223046;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.bd.ok{background:#17291f;color:var(--acc)}.bd.bad{background:#2a1519;color:var(--bad)}.bd.warn{background:#2c2614;color:var(--warn)}
+.cpn{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;background:var(--card2)}
+.cpn.ok{border-left:3px solid var(--acc)}.cpn.bad{border-left:3px solid var(--bad)}
+.cph{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cph b{font-size:.95rem}.cph .pt{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:.72rem;color:var(--muted);font-weight:700;text-transform:uppercase}
+.cph .pt input{width:84px;padding:5px 8px}
+.ci{font:.78rem ui-monospace,Consolas,monospace;color:var(--text);margin-top:6px;word-break:break-all}
+.ci .w{color:var(--warn)}.ci .e{color:var(--bad)}
+.pick{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:10px;border:1px dashed var(--fb);border-radius:8px;background:var(--field);cursor:pointer}
+.pick:hover{border-color:var(--acc)}.pick input{display:none}
+.pick .fl{flex:1;min-width:160px;font-size:.8rem;color:var(--muted)}.pick .fl b{color:var(--text);font-weight:600}
+.pb2{background:#223046;color:var(--text);border-radius:8px;padding:7px 12px;font-weight:700;font-size:.85rem;flex:none}
+button:disabled{opacity:.45;cursor:default}
+.steps{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.steps button{display:flex;align-items:center;gap:6px;background:var(--card2);color:var(--text);border:1px solid var(--line);font-size:.78rem;font-weight:600;padding:6px 10px}
+.steps button:hover{background:#202c3d}
+.steps button.done{color:var(--muted)}.steps button.done i{background:var(--acc)}
+.steps i{width:8px;height:8px;border-radius:50%;background:var(--warn);flex:none}
+.steps .lead{width:100%;font-size:.78rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.note{font-size:.82rem;padding:8px 10px;border-radius:8px;background:#2c2614;color:var(--warn);margin-bottom:10px}
 </style></head><body><div class=wrap>
 <header><img id=hlogo class=hide alt=""><div class=ht><h1 id=htitle>MeshCore TAK Gateway</h1><small id=hsub><span id=hname class=hide>MeshCore TAK Gateway · </span><span id=hver class=hv></span></small></div><button type=button id=updPill class="pill upill hide" onclick=installUpdate()></button><span class=pill><span id=hdot class=dot></span><span id=hstate>…</span></span></header>
 <div id=banner class=hide><img class=bl alt=""><span id=btext></span><img class=bl alt=""></div>
 
 <section class=card><h2>Dashboard <small id=up></small></h2>
 <div id=upd class="upd hide"></div>
+<div id=apNote class="note hide"></div>
+<div id=steps class="steps hide"></div>
 <div class=m id=met></div><div id=serr class=err style="margin-top:8px;font-size:.84rem"></div>
 <h3>Recent messages</h3>
 <div id=chatLog></div>
-<div class=row><button type=button onclick=testTak()>Test TAK connection</button>
+<div class=row><button type=button id=rcBtn onclick=reconnectTak()>Reconnect to TAK</button>
 <button type=button class=s onclick=doReboot()>Reboot</button></div>
 <p class=hint>Counts are since the gateway last started and only include events actually delivered to the TAK server.</p></section>
 
 <div class=sh><span>Settings</span><button type=button onclick=allCards(1)>Expand all</button><button type=button onclick=allCards(0)>Collapse all</button></div>
 
 <form id=f autocomplete=off>
+
+<section class="card cl" id=c_wifi><h2><span class=ti>Wi-Fi</span><span class=sum id=s_wifi></span></h2>
+<div class=g><div><label class=l>Network (SSID)</label><input name=wifi_ssid autocomplete=off></div>
+<div><label class=l>Password</label><input name=wifi_psk type=password autocomplete=new-password></div></div>
+<p class=hint>The gateway needs internet access to reach the TAK server and set its clock. If it cannot join this network for a minute, it opens its own setup Wi-Fi <b>MeshCore-TAK-Setup</b> (password on the OLED, page at 192.168.4.1). Hold the PRG button for 3 seconds to open it at any time.</p>
+</section>
+
+<section class="card cl" id=c_conn><h2><span class=ti>TAK Server</span><span class=sum id=s_conn></span></h2>
+<label class=sw><input type=checkbox name=enabled><i></i>Send to TAK Server</label>
+<div class=g style="margin-top:12px">
+<div style="grid-column:span 2"><label class=l>Host</label><input name=tak_host placeholder=takserver.example.net></div>
+<div><label class=l>Key passphrase</label><input id=key_pass name=key_passphrase type=password value=atakatak autocomplete=off></div>
+</div>
+<p class=hint>Create one TAK Portal integration per certificate below, both on this host, then use <b>Download Certs</b>. The passphrase (usually atakatak) unlocks both <b>.key</b> files. This browser decrypts each key and only the clear key is sent to the gateway.</p>
+
+<h3>Certificates</h3>
+<div class=cpn id=cpW>
+<div class=cph><b>Write</b><span class=bd id=wBadge>…</span><label class=pt>Port<input name=tak_port type=number min=1 max=65535></label></div>
+<p class=hint>Sends markers, the gateway contact and mesh chat. Use the integration whose group the ATAK phones <b>receive</b>.</p>
+<div class=ci id=wInfo></div>
+<label class=pick><input type=file id=certFiles multiple accept=".pem,.key,.crt,.cer"><span class=pb2>Choose files</span><span class=fl id=wFiles>Select the <b>.pem</b> and the <b>.key</b> together</span></label>
+<div class=row><button type=button id=wInstall onclick=installCerts() disabled>Install write certificate</button></div>
+<details><summary>Paste PEM text instead</summary>
+<label class=l style="margin-top:10px">Certificate PEM (the chain may follow it)</label><textarea id=cert></textarea>
+<label class=l style="margin-top:8px">Key PEM</label><textarea id=key></textarea>
+<label class=l style="margin-top:8px">CA PEM (only if the certificate has no chain)</label><textarea id=ca></textarea></details>
+</div>
+<div class=cpn id=cpR>
+<div class=cph><b>Read</b><span class=bd id=rBadge>…</span><label class=pt>Port<input name=rx_port type=number min=1 max=65535></label></div>
+<p class=hint>Optional. Brings ATAK replies back onto the mesh. Use an integration that can <b>receive</b> the group the phones send into, and does not send into the group they receive.</p>
+<div class=ci id=rInfo></div>
+<label class=pick><input type=file id=rxFiles multiple accept=".pem,.key,.crt,.cer"><span class=pb2>Choose files</span><span class=fl id=rFiles>Select the <b>.pem</b> and the <b>.key</b> together</span></label>
+<div class=row><button type=button id=rInstall onclick=installRxCerts() disabled>Install read certificate</button>
+<button type=button class="s hide" id=rRemove onclick=removeRxCerts()>Remove</button></div>
+</div>
+<p class=hint>Ports are saved with <b>Save</b>; certificates install as soon as you press their button.</p>
+</section>
+
+<section class="card cl" id=c_radio><h2><span class=ti>MeshCore radio</span><span class=sum id=s_radio></span></h2>
+<div class="g n">
+<div><label class=l>Preset</label><select name=preset><option>US</option><option>EU</option><option>AU</option><option value=CUSTOM>Custom</option></select></div>
+<div><label class=l>MHz</label><input name=lora_freq></div><div><label class=l>BW kHz</label><input name=lora_bw></div>
+<div><label class=l>SF</label><input name=lora_sf></div><div><label class=l>CR</label><input name=lora_cr></div>
+</div>
+<p class=hint>Must match your mesh exactly. US preset: 910.525 MHz, BW 62.5, SF7, CR5.</p>
+</section>
 
 <section class="card cl" id=c_map><h2><span class=ti>Map marker (CoT)</span><span class=sum id=s_map></span></h2>
 
@@ -237,22 +306,6 @@ dialog::backdrop{background:rgba(6,10,16,.7)}
 <p class=hint>Stale: when TAK greys the marker out. Remove: drop a node that has not advertised for this long (repeaters advert about every 12 h).</p>
 </section>
 
-<section class="card cl" id=c_node><h2><span class=ti>Gateway node</span><span class=sum id=s_node></span><small id=advStat></small></h2>
-<div class=g>
-<div><label class=l>Node name</label><input name=node_name maxlength=31 placeholder=TAK-GW></div>
-<div><label class=l>Latitude</label><input name=chat_lat inputmode=decimal placeholder="e.g. 36.1627"></div>
-<div><label class=l>Longitude</label><input name=chat_lon inputmode=decimal placeholder="e.g. -86.7816"></div>
-</div>
-<p class=hint>Where this gateway is installed. Pasting "lat, lon" into Latitude fills both. Used for the mesh advert and the gateway's TAK contact.</p>
-<h3>Mesh advert</h3>
-<div class=g>
-<label class=sw style="align-self:end;padding-bottom:8px"><input type=checkbox name=advert_on><i></i>Advertise on the mesh</label>
-<div><label class=l>Every</label><select name=advert_hours><option value=1>1 hour</option><option value=3>3 hours</option><option value=6>6 hours</option><option value=12>12 hours</option><option value=24>24 hours</option><option value=48>48 hours</option></select></div>
-</div>
-<div class=row><button type=button onclick=advertNow()>Send advert now</button></div>
-<p class=hint>Floods a MeshCore advert with this name and location so the gateway shows up in contact lists and on mesh maps. Sent at boot once the clock is set, then on this interval.</p>
-</section>
-
 <section class="card cl" id=c_chat><h2><span class=ti>MeshCore chat &harr; TAK</span><span class=sum id=s_chat></span></h2>
 <p class=hint style="margin:0 0 10px">Messages heard on these MeshCore channels are posted to a TAK chat room, and messages sent to that room in TAK go back out on the channel.</p>
 <div class=chn><div class=chh><label class=sw><input type=checkbox name=public_on><i></i>Public channel &rarr; TAK</label><span class=kb id=kbp></span></div>
@@ -268,47 +321,20 @@ dialog::backdrop{background:rgba(6,10,16,.7)}
 <div class=kv id=chatKv></div>
 </section>
 
-<section class="card cl" id=c_conn><h2><span class=ti>TAK Server</span><span class=sum id=s_conn></span></h2>
-<label class=sw><input type=checkbox name=enabled><i></i>Send to TAK Server</label>
-<h3>Wi-Fi</h3>
-<div class=g><div><label class=l>SSID</label><input name=wifi_ssid></div><div><label class=l>Password</label><input name=wifi_psk type=password></div></div>
-<h3>TAK Server</h3>
+<section class="card cl" id=c_node><h2><span class=ti>Gateway node</span><span class=sum id=s_node></span><small id=advStat></small></h2>
 <div class=g>
-<div style="grid-column:span 2"><label class=l>Host</label><input name=tak_host placeholder=takserver.example.net></div>
-<div class=full><label class=l>Channel label</label><input name=channel_label placeholder="display only"></div>
-<div><label class=l>Key passphrase</label><input id=key_pass name=key_passphrase type=password value=atakatak autocomplete=off></div>
+<div><label class=l>Node name</label><input name=node_name maxlength=31 placeholder=TAK-GW></div>
+<div><label class=l>Latitude</label><input name=chat_lat inputmode=decimal placeholder="e.g. 36.1627"></div>
+<div><label class=l>Longitude</label><input name=chat_lon inputmode=decimal placeholder="e.g. -86.7816"></div>
 </div>
-<p class=hint>One host, two Portal integrations. Each integration has its own port. Save stores the host, ports, and passphrase. A Portal <b>.key</b> is decrypted in this browser (the usual atakatak key) and the clear key is what gets stored, which is what the device can use.</p>
-<details open>
-<summary>Write — markers, presence, and mesh chat</summary>
-<div class=g><div><label class=l>Write port</label><input name=tak_port type=number min=1 max=65535></div></div>
-<p class=hint>This certificate submits into the group the ATAK phones receive. It is the only source of map markers.</p>
-<div class=g><div class=full><input type=file id=certFiles multiple accept=".pem,.key,.crt,.cer"></div></div>
-<details><summary>Paste Write PEMs manually</summary>
-<label class=l style="margin-top:10px">CA PEM (optional)</label><textarea id=ca></textarea>
-<label class=l style="margin-top:8px">Write cert PEM</label><textarea id=cert></textarea>
-<label class=l style="margin-top:8px">Write key PEM</label><textarea id=key></textarea></details>
-<div class=row><button type=button onclick=installCerts()>Install write certificate</button></div>
-<p class=hint id=writeStat style="margin:8px 0 0"></p>
-</details>
-<details>
-<summary>Read — ATAK replies onto the mesh</summary>
-<div class=g><div><label class=l>Read port</label><input name=rx_port type=number min=1 max=65535></div></div>
-<p class=hint>This certificate must be allowed to <b>receive</b> the group the ATAK phones submit into, and must not submit into the group those phones receive. Phone certificates stay as they are.</p>
-<div class=row style="margin-top:0"><input type=file id=rxFiles multiple accept=".pem,.key,.crt,.cer" style="flex:1;min-width:200px">
-<button type=button onclick=installRxCerts()>Install read certificate</button>
-<button type=button class=s onclick=removeRxCerts()>Remove</button></div>
-<p class=hint id=readStat style="margin:8px 0 0"></p>
-</details>
-</section>
-
-<section class="card cl" id=c_radio><h2><span class=ti>MeshCore radio</span><span class=sum id=s_radio></span></h2>
-<div class="g n">
-<div><label class=l>Preset</label><select name=preset><option>US</option><option>EU</option><option>AU</option><option value=CUSTOM>Custom</option></select></div>
-<div><label class=l>MHz</label><input name=lora_freq></div><div><label class=l>BW kHz</label><input name=lora_bw></div>
-<div><label class=l>SF</label><input name=lora_sf></div><div><label class=l>CR</label><input name=lora_cr></div>
+<p class=hint>Where this gateway is installed. Pasting "lat, lon" into Latitude fills both. Used for the mesh advert and the gateway's TAK contact.</p>
+<h3>Mesh advert</h3>
+<div class=g>
+<label class=sw style="align-self:end;padding-bottom:8px"><input type=checkbox name=advert_on><i></i>Advertise on the mesh</label>
+<div><label class=l>Every</label><select name=advert_hours><option value=1>1 hour</option><option value=3>3 hours</option><option value=6>6 hours</option><option value=12>12 hours</option><option value=24>24 hours</option><option value=48>48 hours</option></select></div>
 </div>
-<p class=hint>Must match your mesh exactly. US preset: 910.525 MHz, BW 62.5, SF7, CR5.</p>
+<div class=row><button type=button onclick=advertNow()>Send advert now</button></div>
+<p class=hint>Floods a MeshCore advert with this name and location so the gateway shows up in contact lists and on mesh maps. Sent at boot once the clock is set, then on this interval.</p>
 </section>
 
 <section class="card cl" id=c_brand><h2><span class=ti>Customization</span><span class=sum id=s_brand></span></h2>
@@ -366,6 +392,7 @@ function ago(s,none){return s==null?(none||'never'):rel(s)+' ago'}
 function pos(col,row){return (-col*SZ)+'px '+(-row*SZ)+'px'}
 function icoHtml(col,row){return '<span class=ic style="background-position:'+pos(col,row)+'"></span>'}
 function V(n){return F.elements[n]}
+function words(s){s=String(s||'');return s.charAt(0)+s.slice(1).toLowerCase().replace(/_/g,' ')}
 function setDirty(d){dirty=d;$('bar').classList.toggle('show',d);if(!d)document.querySelectorAll('.card.ch').forEach(c=>c.classList.remove('ch'))}
 
 /* ---------- status ---------- */
@@ -374,7 +401,6 @@ function setStatus(j){
   const st=j.state||'?',ok=st==='CONNECTED',bad=/ERROR|BACKOFF/.test(st);
   $('hdot').className='dot '+(ok?'ok':bad?'bad':'warn');$('hstate').textContent='TAK '+st;
   const bw=j.lora_bw!=null?(+j.lora_bw%1?(+j.lora_bw).toFixed(1):(+j.lora_bw).toFixed(0)):'';
-  const words=s=>s.charAt(0)+s.slice(1).toLowerCase().replace(/_/g,' ');
   const rxOld=j.rx_last_ago==null||j.rx_last_ago>1800,hrs=+j.advert_hours||0;
   const next=j.advert_on&&j.advert_ago!=null?'next in '+rel(Math.max(0,hrs*3600-j.advert_ago)):j.advert_on?'waiting for clock':'';
   /* [label, value, [sub lines], state, tooltip]; a sub line starting with "!" is highlighted */
@@ -398,13 +424,7 @@ function setStatus(j){
     (m[2]||[]).map(l=>{const w=String(l).startsWith('!');return '<em'+(w?' class=w':'')+'>'+(esc(w?l.slice(1):l)||'&nbsp;')+'</em>'}).join('')+'</div>').join('');
   $('serr').textContent=j.error&&!ok?'Last error: '+j.error:'';
   $('up').textContent='up '+rel(j.uptime_s)+(j.batt_mv?' · battery '+j.batt_pct+'%':'')+' · heap '+Math.round((j.heap||0)/1024)+' KB';
-  const ws=$('writeStat'),rs=$('readStat');
-  if(ws) ws.textContent=j.certs?('Write certificate installed · link '+(j.state||'')):'Write certificate not installed';
-  if(rs){
-    if(!j.rx_certs) rs.textContent='Read certificate not installed. ATAK replies stay on the server until one is installed.';
-    else rs.textContent='Read link: '+(j.rx_state||'')+' on port '+(j.rx_port||'')+(j.rx_up>=0?' · up '+rel(j.rx_up):'')+
-      (j.rx_err?' · '+j.rx_err:'')+' · TAK→mesh '+(j.chat_t2m||0);
-  }
+  certUi();stepsUi(j);
   $('chatKv').innerHTML='<b>TAK uid</b><span>'+esc(j.gw_uid||'—')+'</span>';
   $('advStat').textContent=j.advert_ago!=null?'sent '+ago(j.advert_ago):'';
   const rc=j.chat_recent||[];
@@ -779,7 +799,10 @@ function sums(){
   if(V('public_on').checked)ch.push('Public → '+(v('public_room')||'MeshCore'));
   for(let i=0;i<3;i++){const n=v('ch'+i+'_name');if(n&&V('ch'+i+'_on').checked)ch.push(n+' ↔ '+(v('ch'+i+'_room')||n))}
   S('chat',ch.length?ch.join(' · '):'no channels bridged');
-  S('conn',(V('enabled').checked?(v('tak_host')||'no host')+' · write :'+v('tak_port')+' · read :'+v('rx_port'):'TAK sending off')+' · Wi-Fi '+(v('wifi_ssid')||'not set'));
+  const j=lastStatus;
+  S('wifi',(v('wifi_ssid')||'not set')+(j.wifi==='UP'?' · connected '+(j.ip||''):j.wifi?' · not connected':''));
+  S('conn',(V('enabled').checked?(v('tak_host')||'no host'):'sending off')+' · write '+(j.certs?':'+v('tak_port'):'cert missing')+
+    ' · read '+(j.rx_certs?':'+v('rx_port'):'off'));
   S('radio',V('preset').selectedOptions[0].text+' · '+v('lora_freq')+' MHz · BW'+v('lora_bw')+' SF'+v('lora_sf')+' CR'+v('lora_cr'));
   const bt=v('banner_text');
   S('brand',(v('ui_title')||'MeshCore TAK Gateway')+(V('banner_on').checked&&bt?' · banner "'+bt+'"':'')+(hasLogo?' · logo':''));
@@ -797,13 +820,15 @@ async function loadForm(){
     V('setup_password').value='';$('pw2').value='';$('pwWarn').classList.toggle('hide',cfg.pw_default!=='1');
     fromCfg(cfg);renderFilters();
     syncPreset(false);chanUi();applyBrand();setDirty(false);
-    if(!cfg.tak_host||!cfg.wifi_ssid)$('c_conn').classList.add('open');
+    if(!cfg.wifi_ssid)openCard($('c_wifi'),true);
+    if(!cfg.tak_host)openCard($('c_conn'),true);
   }catch(e){toast('Config load failed: '+e.message)}
 }
 async function save(){
   const o={};
   for(const el of F.elements){if(!el.name)continue;o[el.name]=el.type==='checkbox'?(el.checked?'1':'0'):el.value}
-  for(const k of ['type','how','remarks','icon','color','opacity','archived'])o['cot_'+k]=DEF[k==='archived'?(DEF[k]?'1':'0'):k];
+  for(const k of ['type','how','remarks','icon','color','opacity'])o['cot_'+k]=DEF[k];
+  o.cot_archived=DEF.archived?'1':'0';
   for(let i=0;i<NF;i++){const f=FL[i]||{},p='f'+i+'_';
     o[p+'on']=f.on?'1':'0';o[p+'label']=f.label||'';o[p+'mode']=String(f.mode||0);o[p+'match']=f.match||'';
     o[p+'strip']=f.strip?'1':'0';o[p+'archived']=f.archived?'1':'0';
@@ -825,6 +850,7 @@ async function save(){
 }
 F.addEventListener('input',e=>{
   if(e.target.type==='file')return;
+  if(['ca','cert','key'].includes(e.target.id))return pickUi();
   if(e.target.closest('dialog')){
     if(e.target.id==='q')return buildGrid();
     if(e.target.id==='q2')return buildSet();
@@ -867,50 +893,117 @@ document.querySelectorAll('.chips').forEach(ch=>ch.onclick=e=>{const v=e.target.
 /* ---------- certs / actions ---------- */
 /*PORTAL_KEY*/
 function readText(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(f)})}
-function unlockKey(pem){
+async function unlockKey(pem){
   const pass=$('key_pass').value||'atakatak';
-  try{return clearPortalKey(pem,pass)}
+  try{return await clearPortalKey(pem,pass)}
   catch(e){
     if(/cannot open/.test(e.message||''))throw e;
     throw new Error('Could not decrypt this key. Check the passphrase (often atakatak).');
   }
 }
-async function installCerts(){
-  toast('Uploading write certificate…');
-  try{
-    let ca=$('ca').value,cert=$('cert').value,key=$('key').value;
-    for(const f of $('certFiles').files){
-      const n=f.name.toLowerCase(),t=await readText(f);
-      if(n.endsWith('.key'))key=t;else if(n.includes('trust')||(n.includes('ca')&&!n.includes('meshcore')))ca+=t;else cert=t;
-    }
-    if(!cert||!key)return toast('Select the Write .pem and the Write .key');
-    key=unlockKey(key);
-    const r=await fetch('/api/certs',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ca,cert,key,key_passphrase:$('key_pass').value||'atakatak'})});
-    toast(await r.text());refreshStatus();
-  }catch(e){toast('Write certificate: '+e.message)}
+/* Files are sorted by what they contain, not by name: one key, the client certificate, and any CA. */
+const blankPick=()=>({cert:'',key:'',ca:'',roles:[]});
+const PICK={w:blankPick(),r:blankPick()};
+async function readPick(files){
+  const p=blankPick(),certs=[];
+  for(const f of files){
+    const t=await readText(f);
+    if(/PRIVATE KEY-----/.test(t)){p.key=t;p.roles.push([f.name,'key'])}
+    else if(/BEGIN CERTIFICATE/.test(t))certs.push([f.name,t]);
+    else p.roles.push([f.name,'skipped: not a PEM file']);
+  }
+  const caName=n=>/(^|[^a-z])(ca|truststore|trust|root|chain)([^a-z]|$)/i.test(n.replace(/\.[^.]+$/,''));
+  const leaf=certs.find(c=>!caName(c[0]))||certs[0];
+  for(const c of certs){if(c===leaf){p.cert=c[1];p.roles.push([c[0],'certificate'])}else{p.ca+=c[1];p.roles.push([c[0],'CA'])}}
+  return p;
 }
-async function installRxCerts(){
-  toast('Uploading read certificate…');
+function pickUi(){
+  for(const [k,id] of [['w','wFiles'],['r','rFiles']]){
+    const p=PICK[k],miss=[!p.cert&&'certificate (.pem)',!p.key&&'key (.key)'].filter(Boolean);
+    $(id).innerHTML=p.roles.length?p.roles.map(r=>'<b>'+esc(r[0])+'</b> → '+esc(k==='r'&&r[1]==='CA'?'CA (not needed)':r[1])).join('<br>')+
+      (miss.length?'<br><span class=err>Missing '+miss.join(' and ')+'</span>':''):'Select the <b>.pem</b> and the <b>.key</b> together';
+  }
+  const pasted=$('cert').value.trim()&&$('key').value.trim();
+  $('wInstall').disabled=!((PICK.w.cert&&PICK.w.key)||pasted);
+  $('rInstall').disabled=!(PICK.r.cert&&PICK.r.key);
+}
+for(const [id,k] of [['certFiles','w'],['rxFiles','r']])$(id).onchange=async e=>{PICK[k]=await readPick(e.target.files);pickUi()};
+function daysTo(d){const t=Date.parse(d+'T23:59:59Z');return isNaN(t)?null:Math.floor((t-Date.now())/864e5)}
+function certLine(cn,exp){
+  if(!cn&&!exp)return '';
+  const d=daysTo(exp),c=d==null?'':d<0?' class=e':d<30?' class=w':'';
+  return esc(cn||'(no name)')+(d==null?'':' · <span'+c+'>'+(d<0?'expired '+esc(exp):'expires '+esc(exp)+' ('+d+' days)')+'</span>');
+}
+function badge(id,text,cls){const b=$(id);b.textContent=text;b.className='bd'+(cls?' '+cls:'')}
+function certUi(){
+  const j=lastStatus,st=j.state||'',up=st==='CONNECTED',w=!!j.certs,r=!!j.rx_certs,rs=j.rx_state||'',rup=rs==='CONNECTED';
+  badge('wBadge',!w?'Not installed':up?'Connected':st==='DISABLED'?'Installed · sending off':'Installed · '+words(st),!w?'bad':up?'ok':'warn');
+  $('cpW').className='cpn '+(!w?'bad':up?'ok':'');
+  $('wInfo').innerHTML=certLine(j.cert_cn,j.cert_exp)+(w&&j.error&&!up&&st!=='DISABLED'?'<div class=e>'+esc(j.error)+'</div>':'');
+  badge('rBadge',!r?'Optional · not installed':rup?'Connected':rs==='WAITING'?'Installed · waits for write link':'Installed · '+words(rs),!r?'':rup?'ok':'warn');
+  $('cpR').className='cpn'+(r&&rup?' ok':'');
+  $('rInfo').innerHTML=r?certLine(j.rx_cert_cn,j.rx_cert_exp)+(j.rx_up>=0?' · up '+esc(rel(j.rx_up)):'')+(j.rx_err&&!rup?'<div class=e>'+esc(j.rx_err)+'</div>':''):'';
+  $('rRemove').classList.toggle('hide',!r);
+  $('wInstall').textContent=(w?'Replace':'Install')+' write certificate';
+  $('rInstall').textContent=(r?'Replace':'Install')+' read certificate';
+  pickUi();
+}
+async function postCert(kind,url,body,btn,done){
+  btn.disabled=true;toast('Installing '+kind+' certificate…');
   try{
-    let cert='',key='';
-    for(const f of $('rxFiles').files){
-      const n=f.name.toLowerCase(),t=await readText(f);
-      if(n.endsWith('.key'))key=t;else if(!(n.includes('trust')||(n.includes('ca')&&!n.includes('meshcore'))))cert=t;
-    }
-    if(!cert||!key)return toast('Select the Read .pem and the Read .key');
-    key=unlockKey(key);
-    const r=await fetch('/api/rx-certs',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({cert,key,key_passphrase:$('key_pass').value||'atakatak'})});
-    toast(await r.text());refreshStatus();
-  }catch(e){toast('Read certificate: '+e.message)}
+    body.key=await unlockKey(body.key);body.key_passphrase=$('key_pass').value||'atakatak';
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    toast(await r.text());if(r.ok)done();refreshStatus();
+  }catch(e){toast(kind[0].toUpperCase()+kind.slice(1)+' certificate: '+e.message)}
+  finally{pickUi()}
+}
+function installCerts(){
+  const p=PICK.w,pasted=!!$('cert').value.trim();
+  const body=pasted?{cert:$('cert').value,key:$('key').value,ca:$('ca').value}:{cert:p.cert,key:p.key,ca:p.ca};
+  if(!body.cert||!body.key)return toast('Select the write .pem and .key');
+  postCert('write','/api/certs',body,$('wInstall'),()=>{PICK.w=blankPick();$('certFiles').value='';for(const id of ['ca','cert','key'])$(id).value=''});
+}
+function installRxCerts(){
+  const p=PICK.r;
+  if(!p.cert||!p.key)return toast('Select the read .pem and .key');
+  postCert('read','/api/rx-certs',{cert:p.cert,key:p.key},$('rInstall'),()=>{PICK.r=blankPick();$('rxFiles').value=''});
 }
 async function removeRxCerts(){
-  if(!confirm('Remove the Read certificate? ATAK replies will stop reaching the mesh.'))return;
+  if(!confirm('Remove the read certificate? ATAK replies will stop reaching the mesh.'))return;
   const r=await fetch('/api/rx-certs/delete',{method:'POST'});
   toast(await r.text());refreshStatus();
 }
-async function testTak(){toast('Testing…');const r=await fetch('/api/test',{method:'POST'});toast(await r.text());refreshStatus()}
+
+/* ---------- setup checklist ---------- */
+function goCard(id){const c=$(id);openCard(c,true);c.scrollIntoView({behavior:'smooth',block:'start'})}
+$('steps').onclick=e=>{const b=e.target.closest('[data-card]');if(b)goCard(b.dataset.card)};
+let stepsHtml='';
+function stepsUi(j){
+  const st=j.state||'';
+  const S=[['Wi-Fi connected',j.wifi==='UP','c_wifi'],['TAK host set',!!j.tak_host,'c_conn'],
+    ['Write certificate installed',!!j.certs,'c_conn'],['Sending turned on',st!=='DISABLED','c_conn'],['Connected to TAK',st==='CONNECTED','c_conn']];
+  const todo=S.some(s=>!s[1]),h=todo?'<span class=lead>Setup</span>'+S.map(s=>'<button type=button data-card='+s[2]+(s[1]?' class=done':'')+'><i></i>'+esc(s[0])+'</button>').join(''):'';
+  $('steps').classList.toggle('hide',!todo);
+  if(h!==stepsHtml)$('steps').innerHTML=stepsHtml=h;
+  const ap=$('apNote');ap.classList.toggle('hide',!j.ap);
+  ap.textContent=j.wifi==='UP'?'The setup Wi-Fi MeshCore-TAK-Setup is also open.':
+    'Not on Wi-Fi yet, so the setup network MeshCore-TAK-Setup is open. Check the Wi-Fi settings below.';
+}
+
+async function reconnectTak(){
+  const b=$('rcBtn'),before=lastStatus.tak_connects||0;
+  const r=await fetch('/api/reconnect',{method:'POST'}),t=await r.text();toast(t);
+  if(!r.ok){if(r.status===409)goCard(/Wi-Fi/.test(t)?'c_wifi':'c_conn');return}
+  b.disabled=true;
+  const until=Date.now()+60000;
+  const poll=async()=>{
+    await refreshStatus();const j=lastStatus,s=j.state;
+    if(s==='CONNECTED'&&(j.tak_connects||0)>before){b.disabled=false;return toast('Connected to TAK')}
+    if(s==='BACKOFF'||s==='ERROR'||Date.now()>until){b.disabled=false;return toast('Not connected: '+(j.error||words(s)))}
+    setTimeout(poll,1500);
+  };
+  setTimeout(poll,1500);
+}
 async function doReboot(){if(!confirm('Reboot the gateway?'))return;await fetch('/api/reboot',{method:'POST'});toast('Rebooting…')}
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
 loadForm();refreshStatus();setInterval(refreshStatus,3000);
