@@ -2,6 +2,7 @@
 
 #include <MyMesh.h>
 #include <SPIFFS.h>
+#include <helpers/TransportKeyStore.h>
 #include <string.h>
 
 #include "TrackerConfig.h"
@@ -307,6 +308,42 @@ static uint16_t staleSeconds(uint16_t interval_s) {
   return (uint16_t)(v + 0.5f);
 }
 
+static bool scopeNameOk(const char* name) {
+  if (!name || !name[0]) return false;
+  size_t n = strlen(name);
+  if (n > 29) return false;
+  for (size_t i = 0; i < n; i++) {
+    char c = name[i];
+    bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+    if (!ok) return false;
+  }
+  return true;
+}
+
+// Empty name clears the scope. A region name is stored the way a repeater
+// derives it: the transport key is the hash of '#' plus the name.
+static bool setFloodScope(MyMesh& mesh, const char* name) {
+  NodePrefs* prefs = mesh.getNodePrefs();
+  if (!name || !name[0] || strcmp(name, "off") == 0 || strcmp(name, "*") == 0) {
+    prefs->default_scope_name[0] = 0;
+    memset(prefs->default_scope_key, 0, sizeof(prefs->default_scope_key));
+    mesh.savePrefs();
+    return true;
+  }
+  if (name[0] == '#') name++;
+  if (!scopeNameOk(name)) return false;
+  char tagged[32];
+  snprintf(tagged, sizeof(tagged), "#%s", name);
+  TransportKeyStore store;
+  TransportKey key;
+  store.getAutoKeyFor(0, tagged, key);
+  strncpy(prefs->default_scope_name, name, sizeof(prefs->default_scope_name) - 1);
+  prefs->default_scope_name[sizeof(prefs->default_scope_name) - 1] = 0;
+  memcpy(prefs->default_scope_key, key.key, sizeof(prefs->default_scope_key));
+  mesh.savePrefs();
+  return true;
+}
+
 static void printHelp() {
   Serial.println("USB console, 115200. Settings are kept on the device.");
   Serial.println("  status");
@@ -315,6 +352,7 @@ static void printHelp() {
   Serial.println("  move <seconds>     how often to send while moving");
   Serial.println("  still <seconds>    how often to send while stopped");
   Serial.println("  stale <seconds>    minimum time the marker stays fresh");
+  Serial.println("  scope <region>     flood region, such as tn-east. scope off clears it");
   Serial.println("  channel <slot> <name> <key>");
   Serial.println("  track <slot>");
   Serial.println("Seconds are 5 to 3600. The marker stays fresh for twice the send interval, or for stale when that is longer.");
@@ -334,6 +372,11 @@ static void printStatus(MyMesh& mesh) {
   Serial.printf("stopped every %us, marker fresh %us\n",
                 (unsigned)cfg.motion.stationary_interval_s, (unsigned)staleSeconds(cfg.motion.stationary_interval_s));
   Serial.printf("radio %.3f MHz  SF%d  BW %.1f  CR%d\n", prefs->freq, prefs->sf, prefs->bw, prefs->cr);
+  if (prefs->default_scope_name[0]) {
+    Serial.printf("scope %s\n", prefs->default_scope_name);
+  } else {
+    Serial.println("scope none");
+  }
   if (keyed) {
     Serial.printf("tracker slot %u  %s\n", (unsigned)cfg.channel, ch.name);
   } else {
@@ -501,6 +544,25 @@ static void handleLine(MyMesh& mesh, char* text) {
     Serial.printf("tracker slot %d %s\n", slot, ch.name);
     return;
   }
+  if (strncmp(text, "scope ", 6) == 0 || strcmp(text, "scope") == 0) {
+    char* arg = text + 5;
+    while (*arg == ' ') arg++;
+    for (char* p = arg; *p; p++) {
+      if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+    }
+    if (!arg[0]) {
+      NodePrefs* prefs = mesh.getNodePrefs();
+      Serial.printf("scope %s\n", prefs->default_scope_name[0] ? prefs->default_scope_name : "none");
+      return;
+    }
+    if (!setFloodScope(mesh, arg)) {
+      Serial.println("scope is a lowercase region name, such as tn-east, or off");
+      return;
+    }
+    NodePrefs* prefs = mesh.getNodePrefs();
+    Serial.printf("scope %s\n", prefs->default_scope_name[0] ? prefs->default_scope_name : "none");
+    return;
+  }
   if (strncmp(text, "channel ", 8) == 0) {
     char* p = text + 8;
     char* slot_s = nextToken(p);
@@ -648,6 +710,15 @@ void trackerBridgeBegin(MyMesh& mesh) {
   }
   mesh.applyGpsPrefs();
   if (changed) radio_driver.setParams(prefs->freq, prefs->bw, prefs->sf, prefs->cr);
+  // A build can name a flood region with -D TRACKER_DEFAULT_SCOPE=\"tn-east\".
+  // An empty scope stays empty, so a radio is not silently moved onto someone else's region.
+#ifdef TRACKER_DEFAULT_SCOPE
+  if (!prefs->default_scope_name[0]) {
+    if (setFloodScope(mesh, TRACKER_DEFAULT_SCOPE)) {
+      Serial.printf("scope was empty; set to %s\n", TRACKER_DEFAULT_SCOPE);
+    }
+  }
+#endif
   if (!saveSettings(prefs)) {
     Serial.println("could not store tracker settings");
   }
@@ -794,8 +865,10 @@ void trackerBridgeLoop(MyMesh& mesh) {
   sent_seq = report.sequence;
   sent_ms = now_ms;
   const char* pace = decision.state == TrackerMotionState::Moving ? "moving" : "stopped";
-  Serial.printf("sent %s every %us slot %d %s: %s\n",
-                pace, (unsigned)decision.interval_s, slot, prefs->node_name, body);
+  Serial.printf("sent %s every %us slot %d scope %s %s: %s\n",
+                pace, (unsigned)decision.interval_s, slot,
+                prefs->default_scope_name[0] ? prefs->default_scope_name : "none",
+                prefs->node_name, body);
 }
 
 void trackerBridgeCopyStatus(MyMesh& mesh, TrackerScreenInfo* out) {

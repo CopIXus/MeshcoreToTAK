@@ -78,23 +78,52 @@ void MyMesh::applyChannelsFromConfig() {
   setChannel(TAK_PUBLIC_SLOT, pub);
 }
 
+static void copySender(char* dest, size_t dest_len, const char* start, const char* end) {
+  if (!dest || dest_len == 0) return;
+  size_t n = (start && end && end > start) ? (size_t)(end - start) : 0;
+  if (n >= dest_len) n = dest_len - 1;
+  if (n && start) memcpy(dest, start, n);
+  dest[n] = 0;
+}
+
 void MyMesh::onChannelMessageRecv(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t timestamp,
                                   const char* text) {
-  (void)pkt;
   int ch = findChannelIdx(channel);
   if (!_cfg || !_client || ch < 0) return;
   bool chat_on = ch == TAK_PUBLIC_SLOT ? _cfg->prefs.public_on : (ch < TAK_MAX_CHAT && _cfg->prefs.chat[ch].enabled);
   bool track_on = ch < TAK_MAX_CHAT && _cfg->prefs.tracker_ch[ch].enabled;
   if (!chat_on && !track_on) return;
 
-  // MeshCore group text is "<sender>: <message>"
+  // Group text is "<sender>: <message>". A room or extra hop label can wrap that again
+  // ("Room: Callsign: !MT1;..."). The tracker body is the !MT1 segment, and the callsign
+  // is the name written immediately in front of it. Ordinary chat still uses the first name.
   char sender[TAK_CALLSIGN_LEN] = "MeshCore";
-  const char* msg = text;
-  const char* sep = strstr(text, ": ");
-  if (sep && sep - text < (int)sizeof(sender)) {
-    memcpy(sender, text, sep - text);
-    sender[sep - text] = 0;
+  const char* msg = text ? text : "";
+  const char* sep = text ? strstr(text, ": ") : nullptr;
+  if (sep && sep > text && sep - text < (int)sizeof(sender)) {
+    copySender(sender, sizeof(sender), text, sep);
     msg = sep + 2;
+  }
+  const char* marker = nullptr;
+  for (const char* p = text; p && (p = strstr(p, "!MT1")); p += 4) {
+    if (strncmp(p, "!MT1;", 5) == 0) {
+      marker = p;
+      break;
+    }
+  }
+  // Only a "!MT1;" that starts the text or sits right after "Name: " is a tracker.
+  // A chat sentence that merely mentions the token stays chat.
+  bool wrapped = marker && marker != msg &&
+                 (marker == text || (marker - text >= 2 && marker[-2] == ':' && marker[-1] == ' '));
+  if (wrapped) {
+    msg = marker;
+    if (marker != text) {
+      const char* name = text;
+      for (const char* p = text; p + 2 <= marker - 2; p++) {
+        if (p[0] == ':' && p[1] == ' ') name = p + 2;
+      }
+      copySender(sender, sizeof(sender), name, marker - 2);
+    }
   }
   if (TakTracker::isTrackerMessage(msg)) {
     if (track_on) {
@@ -104,7 +133,8 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel& channel, mesh::Packe
     }
   }
   if (!chat_on) return;
-  Serial.printf("[CHAT] mesh ch%d %s -> TAK room %s: %s\n", ch, sender, _client->roomFor(ch), msg);
+  Serial.printf("[CHAT] mesh ch%d %s hops=%u -> TAK room %s: %s\n", ch, sender,
+                pkt ? pkt->getPathHashCount() : 0, _client->roomFor(ch), msg);
   _client->noteChat(ch, sender, msg);
   if (_cfg->prefs.enabled && !_client->queueChat(ch, sender, msg)) {
     Serial.println("[CHAT] not sent to TAK (no link / no time yet)");
@@ -123,12 +153,11 @@ void MyMesh::applyRadioFromConfig() {
 
 void MyMesh::onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path_len, const uint8_t* path) {
   (void)is_new;
-  (void)path_len;
   (void)path;
 
   bool gps = TakNodes::hasValidGps(contact);
-  Serial.printf("[MESH] ADVERT %s lat=%ld lon=%ld%s\n", contact.name, (long)contact.gps_lat,
-                (long)contact.gps_lon, gps ? "" : " (no position - not sent to TAK)");
+  Serial.printf("[MESH] ADVERT %s hops=%u lat=%ld lon=%ld%s\n", contact.name, (unsigned)(path_len & 63),
+                (long)contact.gps_lat, (long)contact.gps_lon, gps ? "" : " (no position - not sent to TAK)");
 
   if (!_nodes || !_cfg) return;
 
@@ -157,6 +186,21 @@ void MyMesh::onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path
   }
 }
 
+static const char* routeName(const mesh::Packet* packet) {
+  if (packet->isRouteFlood()) return packet->hasTransportCodes() ? "flood-scope" : "flood";
+  return packet->hasTransportCodes() ? "direct-scope" : "direct";
+}
+
+void MyMesh::onGroupDecryptFailed(mesh::Packet* packet, uint8_t channel_hash) {
+  Serial.printf("[MESH] group not opened ch#%02x %s hops=%u hash=%u (path bytes are not the message; MAC failed)\n",
+                channel_hash, routeName(packet), packet->getPathHashCount(), packet->getPathHashSize());
+}
+
+void MyMesh::onAdvertSignatureFailed(mesh::Packet* packet, int app_data_len) {
+  Serial.printf("[MESH] advert signature failed %s hops=%u hash=%u app_data=%d\n", routeName(packet),
+                packet->getPathHashCount(), packet->getPathHashSize(), app_data_len);
+}
+
 void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
   (void)len;
   (void)score;
@@ -166,12 +210,14 @@ void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
   _nodes->rx.last_rssi = radio_driver.getLastRSSI();
   _nodes->rx.last_snr = radio_driver.getLastSNR();
   if (packet->getPayloadType() == PAYLOAD_TYPE_GRP_TXT && packet->payload_len) {
-    Serial.printf("[MESH] RX group text ch#%02x rssi=%.0f snr=%.1f\n", packet->payload[0], _nodes->rx.last_rssi,
+    Serial.printf("[MESH] RX group text ch#%02x %s hops=%u hash=%u rssi=%.0f snr=%.1f\n", packet->payload[0],
+                  routeName(packet), packet->getPathHashCount(), packet->getPathHashSize(), _nodes->rx.last_rssi,
                   _nodes->rx.last_snr);
     return;
   }
-  Serial.printf("[MESH] RX type=%u rssi=%.0f snr=%.1f\n", (unsigned)packet->getPayloadType(),
-                _nodes->rx.last_rssi, _nodes->rx.last_snr);
+  Serial.printf("[MESH] RX type=%u %s hops=%u hash=%u rssi=%.0f snr=%.1f\n", (unsigned)packet->getPayloadType(),
+                routeName(packet), packet->getPathHashCount(), packet->getPathHashSize(), _nodes->rx.last_rssi,
+                _nodes->rx.last_snr);
 }
 
 void MyMesh::loopGateway() {
