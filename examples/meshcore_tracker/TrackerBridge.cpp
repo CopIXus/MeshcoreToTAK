@@ -2,6 +2,7 @@
 
 #include <MyMesh.h>
 #include <SPIFFS.h>
+#include <helpers/TransportKeyStore.h>
 #include <string.h>
 
 #include "TrackerConfig.h"
@@ -16,10 +17,19 @@ static bool announced = false;
 static char line[160];
 static uint8_t line_len = 0;
 static bool ever_sent = false;
+static uint32_t gps_bytes_seen = 0;
+static uint32_t gps_marks_seen = 0;
+static uint32_t gps_quiet_since_ms = 0;
+static uint32_t gps_report_ms = 0;
+static uint8_t gps_baud_i = 0;
+static const uint32_t gps_bauds[] = {9600, 115200, 38400, 57600};
 static double sent_lat = 0;
 static double sent_lon = 0;
 static uint32_t sent_seq = 0;
 static uint32_t sent_ms = 0;
+static bool have_fix = false;
+static const char* problem = "";
+static uint32_t problem_report_ms = 0;
 
 static bool channelKeyed(const ChannelDetails& ch) {
   for (int i = 0; i < 32; i++) {
@@ -201,6 +211,17 @@ static bool saveSettings(NodePrefs* prefs) {
   return false;
 }
 
+static bool roleOk(const char* s) {
+  size_t n = strlen(s);
+  if (n < 2 || n > 4) return false;
+  for (size_t i = 0; i < n; i++) {
+    char c = s[i];
+    bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z');
+    if (!ok) return false;
+  }
+  return true;
+}
+
 static void loadRoleFromPrefs() {
   File prefs = SPIFFS.open("/new_prefs", "r");
   if (!prefs || !prefs.seek(36)) {
@@ -212,7 +233,8 @@ static void loadRoleFromPrefs() {
     char tmp[5];
     int i = 0;
     while (i < 4 && ((raw[i] >= 'a' && raw[i] <= 'z') || (raw[i] >= '0' && raw[i] <= '9'))) {
-      tmp[i++] = (char)raw[i];
+      tmp[i] = (char)raw[i];
+      i++;
     }
     tmp[i] = 0;
     if (i >= 2) memcpy(cfg.role, tmp, sizeof(cfg.role));
@@ -273,7 +295,9 @@ static void loadTrackerFile(NodePrefs* prefs) {
     tmp[i++] = c;
   }
   tmp[i] = 0;
-  if (i >= 2) memcpy(cfg.role, tmp, sizeof(cfg.role));
+  // The formatter refuses a bad role, which would silently block every fix.
+  if (roleOk(tmp)) memcpy(cfg.role, tmp, sizeof(cfg.role));
+  else Serial.printf("role '%s' in tracker.cfg is not valid, using %s\n", tmp, cfg.role);
 }
 
 static uint16_t staleSeconds(uint16_t interval_s) {
@@ -284,6 +308,42 @@ static uint16_t staleSeconds(uint16_t interval_s) {
   return (uint16_t)(v + 0.5f);
 }
 
+static bool scopeNameOk(const char* name) {
+  if (!name || !name[0]) return false;
+  size_t n = strlen(name);
+  if (n > 29) return false;
+  for (size_t i = 0; i < n; i++) {
+    char c = name[i];
+    bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+    if (!ok) return false;
+  }
+  return true;
+}
+
+// Empty name clears the scope. A region name is stored the way a repeater
+// derives it: the transport key is the hash of '#' plus the name.
+static bool setFloodScope(MyMesh& mesh, const char* name) {
+  NodePrefs* prefs = mesh.getNodePrefs();
+  if (!name || !name[0] || strcmp(name, "off") == 0 || strcmp(name, "*") == 0) {
+    prefs->default_scope_name[0] = 0;
+    memset(prefs->default_scope_key, 0, sizeof(prefs->default_scope_key));
+    mesh.savePrefs();
+    return true;
+  }
+  if (name[0] == '#') name++;
+  if (!scopeNameOk(name)) return false;
+  char tagged[32];
+  snprintf(tagged, sizeof(tagged), "#%s", name);
+  TransportKeyStore store;
+  TransportKey key;
+  store.getAutoKeyFor(0, tagged, key);
+  strncpy(prefs->default_scope_name, name, sizeof(prefs->default_scope_name) - 1);
+  prefs->default_scope_name[sizeof(prefs->default_scope_name) - 1] = 0;
+  memcpy(prefs->default_scope_key, key.key, sizeof(prefs->default_scope_key));
+  mesh.savePrefs();
+  return true;
+}
+
 static void printHelp() {
   Serial.println("USB console, 115200. Settings are kept on the device.");
   Serial.println("  status");
@@ -292,6 +352,7 @@ static void printHelp() {
   Serial.println("  move <seconds>     how often to send while moving");
   Serial.println("  still <seconds>    how often to send while stopped");
   Serial.println("  stale <seconds>    minimum time the marker stays fresh");
+  Serial.println("  scope <region>     flood region, such as tn-east. scope off clears it");
   Serial.println("  channel <slot> <name> <key>");
   Serial.println("  track <slot>");
   Serial.println("Seconds are 5 to 3600. The marker stays fresh for twice the send interval, or for stale when that is longer.");
@@ -311,6 +372,11 @@ static void printStatus(MyMesh& mesh) {
   Serial.printf("stopped every %us, marker fresh %us\n",
                 (unsigned)cfg.motion.stationary_interval_s, (unsigned)staleSeconds(cfg.motion.stationary_interval_s));
   Serial.printf("radio %.3f MHz  SF%d  BW %.1f  CR%d\n", prefs->freq, prefs->sf, prefs->bw, prefs->cr);
+  if (prefs->default_scope_name[0]) {
+    Serial.printf("scope %s\n", prefs->default_scope_name);
+  } else {
+    Serial.println("scope none");
+  }
   if (keyed) {
     Serial.printf("tracker slot %u  %s\n", (unsigned)cfg.channel, ch.name);
   } else {
@@ -370,17 +436,6 @@ static int parseKey(const char* text, uint8_t out[32]) {
   if (len == 16 || len == 32) return len;
   memset(out, 0, 32);
   return 0;
-}
-
-static bool roleOk(const char* s) {
-  size_t n = strlen(s);
-  if (n < 2 || n > 4) return false;
-  for (size_t i = 0; i < n; i++) {
-    char c = s[i];
-    bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z');
-    if (!ok) return false;
-  }
-  return true;
 }
 
 static char* nextToken(char*& p) {
@@ -489,6 +544,25 @@ static void handleLine(MyMesh& mesh, char* text) {
     Serial.printf("tracker slot %d %s\n", slot, ch.name);
     return;
   }
+  if (strncmp(text, "scope ", 6) == 0 || strcmp(text, "scope") == 0) {
+    char* arg = text + 5;
+    while (*arg == ' ') arg++;
+    for (char* p = arg; *p; p++) {
+      if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+    }
+    if (!arg[0]) {
+      NodePrefs* prefs = mesh.getNodePrefs();
+      Serial.printf("scope %s\n", prefs->default_scope_name[0] ? prefs->default_scope_name : "none");
+      return;
+    }
+    if (!setFloodScope(mesh, arg)) {
+      Serial.println("scope is a lowercase region name, such as tn-east, or off");
+      return;
+    }
+    NodePrefs* prefs = mesh.getNodePrefs();
+    Serial.printf("scope %s\n", prefs->default_scope_name[0] ? prefs->default_scope_name : "none");
+    return;
+  }
   if (strncmp(text, "channel ", 8) == 0) {
     char* p = text + 8;
     char* slot_s = nextToken(p);
@@ -548,6 +622,63 @@ static void pollConsole(MyMesh& mesh) {
   }
 }
 
+static void sendUbx(uint8_t cls, uint8_t id, const uint8_t* payload, uint16_t len) {
+  uint8_t hdr[4] = {cls, id, (uint8_t)len, (uint8_t)(len >> 8)};
+  uint8_t a = 0, b = 0;
+  for (int i = 0; i < 4; i++) { a = (uint8_t)(a + hdr[i]); b = (uint8_t)(b + a); }
+  for (uint16_t i = 0; i < len; i++) { a = (uint8_t)(a + payload[i]); b = (uint8_t)(b + a); }
+  Serial1.write(0xB5);
+  Serial1.write(0x62);
+  Serial1.write(hdr, 4);
+  if (len) Serial1.write(payload, len);
+  Serial1.write(a);
+  Serial1.write(b);
+}
+
+static void sendNmea(const char* body) {
+  uint8_t cs = 0;
+  for (const char* p = body; *p; ++p) cs ^= (uint8_t)*p;
+  Serial1.print('$');
+  Serial1.print(body);
+  Serial1.print('*');
+  if (cs < 16) Serial1.print('0');
+  Serial1.print(cs, HEX);
+  Serial1.print("\r\n");
+}
+
+static void configureGps() {
+  // Stay in continuous tracking and ask for the sentences a fix is read from.
+  // u-blox, MediaTek, and AT6558 each ignore the commands they do not understand.
+  const uint8_t nmea_ids[] = {0x00, 0x04, 0x03, 0x02};  // GGA, RMC, GSV, GSA
+  for (uint8_t id : nmea_ids) {
+    uint8_t msg[8] = {0xF0, id, 0, 1, 0, 0, 0, 0};
+    sendUbx(0x06, 0x01, msg, 8);
+    delay(20);
+  }
+  uint8_t rxm[2] = {0x00, 0x00};
+  sendUbx(0x06, 0x11, rxm, 2);
+  delay(20);
+  uint8_t rate[6] = {0xE8, 0x03, 0x01, 0x00, 0x01, 0x00};
+  sendUbx(0x06, 0x08, rate, 6);
+  delay(20);
+  sendNmea("PMTK225,0");
+  sendNmea("PMTK314,0,1,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0");
+  sendNmea("PMTK353,1,1,1,0,0");
+  sendNmea("PCAS04,7");
+  sendNmea("PCAS03,1,0,1,1,1,0,0,0,0,0,,,0,0");
+  Serial.println("gps set to continuous tracking");
+}
+
+static void openGpsUart() {
+  // GPIO 34 is input-only, so the ESP receive pin stays PIN_GPS_TX.
+  Serial1.end();
+  delay(20);
+  Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX);
+  Serial1.begin(gps_bauds[gps_baud_i]);
+  Serial.printf("gps listening at %lu baud (esp rx %d tx %d)\n",
+                (unsigned long)gps_bauds[gps_baud_i], PIN_GPS_TX, PIN_GPS_RX);
+}
+
 void trackerBridgeBegin(MyMesh& mesh) {
   cfg = trackerDefaults();
   loadTrackerFile(mesh.getNodePrefs());
@@ -579,6 +710,15 @@ void trackerBridgeBegin(MyMesh& mesh) {
   }
   mesh.applyGpsPrefs();
   if (changed) radio_driver.setParams(prefs->freq, prefs->bw, prefs->sf, prefs->cr);
+  // A build can name a flood region with -D TRACKER_DEFAULT_SCOPE=\"tn-east\".
+  // An empty scope stays empty, so a radio is not silently moved onto someone else's region.
+#ifdef TRACKER_DEFAULT_SCOPE
+  if (!prefs->default_scope_name[0]) {
+    if (setFloodScope(mesh, TRACKER_DEFAULT_SCOPE)) {
+      Serial.printf("scope was empty; set to %s\n", TRACKER_DEFAULT_SCOPE);
+    }
+  }
+#endif
   if (!saveSettings(prefs)) {
     Serial.println("could not store tracker settings");
   }
@@ -586,6 +726,11 @@ void trackerBridgeBegin(MyMesh& mesh) {
   Serial.println("MeshCoreTracker");
   printStatus(mesh);
   Serial.println("advert location off, GPS on");
+  gps_quiet_since_ms = millis();
+  gps_report_ms = gps_quiet_since_ms + 15000;
+  Serial.printf("gps listening at %lu baud (esp rx %d tx %d)\n",
+                (unsigned long)gps_bauds[0], PIN_GPS_TX, PIN_GPS_RX);
+  configureGps();
   printHelp();
 }
 
@@ -598,11 +743,55 @@ void trackerBridgeLoop(MyMesh& mesh) {
 
   LocationProvider* gps = sensors.getLocationProvider();
   bool valid = gps && gps->isValid();
+  uint32_t bytes = gps ? gps->rxBytes() : 0;
+  uint32_t marks = gps ? gps->nmeaMarks() : 0;
+  if (marks != gps_marks_seen) {
+    if (gps_marks_seen == 0) {
+      Serial.printf("gps is talking (%lu nmea)\n", (unsigned long)marks);
+    }
+    gps_marks_seen = marks;
+    gps_bytes_seen = bytes;
+    gps_quiet_since_ms = now_ms;
+  }
+  if (!valid && marks == gps_marks_seen && (int32_t)(now_ms - gps_quiet_since_ms) > 12000) {
+    gps_baud_i++;
+    if (gps_baud_i >= (uint8_t)(sizeof(gps_bauds) / sizeof(gps_bauds[0]))) {
+      gps_baud_i = 0;
+    }
+    openGpsUart();
+    gps_quiet_since_ms = now_ms;
+  }
+  if (!valid && (int32_t)(now_ms - gps_report_ms) >= 0) {
+    gps_report_ms = now_ms + 15000;
+    Serial.printf("gps no fix  sats %ld  gga %lu rmc %lu gsv %lu  %s\n",
+                  gps ? gps->satellitesCount() : 0,
+                  gps ? (unsigned long)gps->ggaCount() : 0,
+                  gps ? (unsigned long)gps->rmcCount() : 0,
+                  gps ? (unsigned long)gps->gsvCount() : 0,
+                  gps ? gps->lastSentence() : "");
+  }
+  if (valid && !have_fix) {
+    Serial.printf("gps fix  sats %ld  %.5f %.5f\n", gps->satellitesCount(),
+                  gps->getLatitude() / 1000000.0, gps->getLongitude() / 1000000.0);
+  } else if (!valid && have_fix) {
+    Serial.println("gps fix lost");
+  }
+  have_fix = valid;
+
+  // sensors.node_lat only refreshes every gps_interval, so it can still be 0,0
+  // in the second the receiver first reports a fix. Read the receiver directly.
   TrackerFix fix;
   fix.valid = valid;
-  fix.lat = valid ? sensors.node_lat : 0;
-  fix.lon = valid ? sensors.node_lon : 0;
+  fix.lat = valid ? gps->getLatitude() / 1000000.0 : 0;
+  fix.lon = valid ? gps->getLongitude() / 1000000.0 : 0;
   fix.speed_mps = 0;
+  fix.has_speed = valid && gps->hasSpeed();
+  if (fix.has_speed) fix.speed_mps = gps->getSpeedMps();
+  if (valid && fix.lat == 0 && fix.lon == 0) fix.valid = false;
+
+  // onFix records a send as done. Keep the prior state so a fix that does not
+  // go out is offered again next second instead of after the stopped interval.
+  TrackerMotion before = motion;
   TrackerDecision decision = motion.onFix(fix, now_ms / 1000);
   if (!decision.send) {
     if (!announced && !valid) {
@@ -611,12 +800,18 @@ void trackerBridgeLoop(MyMesh& mesh) {
     }
     return;
   }
+  bool report_problem = (int32_t)(now_ms - problem_report_ms) >= 0;
 
   int slot = pickChannel(mesh);
   ChannelDetails ch;
   if (slot < 0 || !mesh.getChannel(slot, ch)) {
-    Serial.printf("fix ready. slot %u has no key. Type: channel %u <name> <key>\n",
-                  (unsigned)cfg.channel, (unsigned)cfg.channel);
+    motion = before;
+    problem = "no channel key";
+    if (report_problem) {
+      problem_report_ms = now_ms + 15000;
+      Serial.printf("fix ready. slot %u has no key. Type: channel %u <name> <key>\n",
+                    (unsigned)cfg.channel, (unsigned)cfg.channel);
+    }
     return;
   }
 
@@ -629,9 +824,9 @@ void trackerBridgeLoop(MyMesh& mesh) {
   memset(&report, 0, sizeof(report));
   trackerIdFromPublicKey(mesh.self_id.pub_key, report.id);
   memcpy(report.role, cfg.role, sizeof(report.role));
-  report.lat = sensors.node_lat;
-  report.lon = sensors.node_lon;
-  report.altitude_m = (float)sensors.node_altitude;
+  report.lat = fix.lat;
+  report.lon = fix.lon;
+  report.altitude_m = (float)(gps->getAltitude() / 1000.0);
   report.has_altitude = true;
   report.battery_pct = batteryPercent();
   report.stale_sec = decision.stale_s;
@@ -640,22 +835,40 @@ void trackerBridgeLoop(MyMesh& mesh) {
   char body[128];
   size_t n = trackerFormatFix(body, sizeof(body), report);
   if (n == 0) {
-    Serial.println("tracker packet rejected by formatter");
+    motion = before;
+    problem = "fix rejected";
+    if (report_problem) {
+      problem_report_ms = now_ms + 15000;
+      Serial.printf("tracker packet rejected: role '%s' lat %.5f lon %.5f alt %.0f stale %u\n",
+                    report.role, report.lat, report.lon, report.altitude_m,
+                    (unsigned)report.stale_sec);
+    }
     return;
   }
 
   uint32_t stamp = unix_s > 1700000000UL ? unix_s : (uint32_t)(now_ms / 1000);
   if (!mesh.sendGroupMessage(stamp, ch.channel, prefs->node_name, body, (int)n)) {
-    Serial.println("tracker send failed");
+    motion = before;
+    problem = "send failed";
+    if (report_problem) {
+      problem_report_ms = now_ms + 15000;
+      Serial.println("tracker send failed, retrying");
+    }
     return;
   }
+  problem = "";
+  problem_report_ms = now_ms;
   announced = true;
   ever_sent = true;
   sent_lat = report.lat;
   sent_lon = report.lon;
   sent_seq = report.sequence;
   sent_ms = now_ms;
-  Serial.printf("sent slot %d %s: %s\n", slot, prefs->node_name, body);
+  const char* pace = decision.state == TrackerMotionState::Moving ? "moving" : "stopped";
+  Serial.printf("sent %s every %us slot %d scope %s %s: %s\n",
+                pace, (unsigned)decision.interval_s, slot,
+                prefs->default_scope_name[0] ? prefs->default_scope_name : "none",
+                prefs->node_name, body);
 }
 
 void trackerBridgeCopyStatus(MyMesh& mesh, TrackerScreenInfo* out) {
@@ -668,6 +881,8 @@ void trackerBridgeCopyStatus(MyMesh& mesh, TrackerScreenInfo* out) {
     out->keyed = true;
     strncpy(out->channel, ch.name, sizeof(out->channel) - 1);
   }
+  out->has_fix = have_fix;
+  strncpy(out->problem, problem, sizeof(out->problem) - 1);
   out->sent = ever_sent;
   out->lat = sent_lat;
   out->lon = sent_lon;

@@ -10,6 +10,8 @@ struct TrackerScreenInfo {
   char uid[9];
   uint8_t slot;
   bool keyed;
+  bool has_fix;
+  char problem[20];
   bool sent;
   double lat;
   double lon;

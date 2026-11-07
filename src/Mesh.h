@@ -57,6 +57,16 @@ protected:
   virtual bool allowPacketForward(const Packet* packet);
 
   /**
+   * \brief  Direct packet still names the repeaters ahead of this node.
+   *         Forwarders return false so only the next hop carries it.
+   *         A listen-only node can return true to read group traffic and adverts in transit.
+   */
+  virtual bool overhearRoutedDirect(uint8_t payload_type) const {
+    (void)payload_type;
+    return false;
+  }
+
+  /**
    * \returns  number of milliseconds delay to apply to retransmitting the given packet.
    */
   virtual uint32_t getRetransmitDelay(const Packet* packet);
@@ -159,6 +169,23 @@ protected:
    * \param  channel  the matching GroupChannel
   */
   virtual void onGroupDataRecv(Packet* packet, uint8_t type, const GroupChannel& channel, uint8_t* data, size_t len) { }
+
+  /**
+   * \brief  Group packet was new, but no configured channel key opened it.
+   *         Path bytes are already removed; a failure here means the ciphertext itself did not match.
+   */
+  virtual void onGroupDecryptFailed(Packet* packet, uint8_t channel_hash) {
+    (void)packet;
+    (void)channel_hash;
+  }
+
+  /**
+   * \brief  Advert payload did not verify. app_data_len is the byte count after the signature.
+   */
+  virtual void onAdvertSignatureFailed(Packet* packet, int app_data_len) {
+    (void)packet;
+    (void)app_data_len;
+  }
 
   /**
    * \brief  A simple ACK packet has been received.

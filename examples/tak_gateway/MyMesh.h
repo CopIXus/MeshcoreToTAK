@@ -44,6 +44,14 @@ protected:
   float getAirtimeBudgetFactor() const override { return 2.0f; }  // listen-heavy
   int calcRxDelay(float score, uint32_t air_time) const override { return 0; }
   bool allowPacketForward(const mesh::Packet* packet) override { return false; }
+  // Hear group chat, tracker text, and adverts while they are still addressed through a repeater.
+  // The payload is unchanged; only the path hash list in front of it grows or shrinks per hop.
+  bool overhearRoutedDirect(uint8_t payload_type) const override {
+    return payload_type == PAYLOAD_TYPE_GRP_TXT || payload_type == PAYLOAD_TYPE_GRP_DATA ||
+           payload_type == PAYLOAD_TYPE_ADVERT;
+  }
+  void onGroupDecryptFailed(mesh::Packet* packet, uint8_t channel_hash) override;
+  void onAdvertSignatureFailed(mesh::Packet* packet, int app_data_len) override;
   // SX1262 receivers can go deaf after hours of uptime; a periodic AGC reset keeps them listening.
   int getAGCResetInterval() const override { return 60000; }
 
