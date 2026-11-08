@@ -179,5 +179,9 @@ TakSeqResult TakTracker::sequence(bool has_last, uint32_t last, uint32_t q) {
   int32_t delta = (int32_t)(q - last);
   if (delta == 0) return TakSeqResult::Duplicate;
   if (delta > 0) return TakSeqResult::Accept;
+  // A reboot before GPS sets the clock restarts q near 1. The gateway still holds
+  // the previous unix-sized sequence, so the delta is largely negative. A small
+  // step backward is still a replay.
+  if (delta < -1000000) return TakSeqResult::Accept;
   return TakSeqResult::Older;
 }

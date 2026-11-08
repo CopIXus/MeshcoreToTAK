@@ -36,6 +36,6 @@ public:
   // True when text is the v1 tracker prefix, including a malformed body.
   static bool isTrackerMessage(const char* text);
   static bool parse(const char* text, TakTrackerMessage& out);
-  // Unsigned 32-bit sequence. A reboot that jumps forward is accepted; a replay is not.
+  // Unsigned 32-bit sequence. A reboot that jumps forward, or that restarts near 1, is accepted. A small step backward is a replay.
   static TakSeqResult sequence(bool has_last, uint32_t last, uint32_t q);
 };

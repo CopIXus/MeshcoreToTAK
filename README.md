@@ -123,7 +123,7 @@ Turn **tracker parsing** on for that private channel and use the same channel ke
 
 An unknown role uses that channel's fallback style. A per-id row can change one tracker's callsign or picture without changing the radio.
 
-The MeshCore Android app can set the tracker's name and its channel. It has no command for the role, the send interval, how long the marker stays fresh, or which flood region the fix uses. Those are set from the radio's USB console at 115200 baud: `role`, `move`, `still`, `stale`, `name`, `channel`, `scope`, and `status`. The radio's Tracker screen shows the role, the channel, and the last fix it sent. Radio setup is written up in [MeshCoreTracker](https://github.com/CopIXus/MeshCoreTracker).
+The MeshCore Android app can set the tracker's name and its channel. It has no command for the role, the send interval, how long the marker stays fresh, or which flood region the fix uses. Those are set from the radio's USB console at 115200 baud: `role`, `move`, `still`, `stale`, `name`, `channel`, `scope`, and `status`. `status log` prints what the radio did on the last trip. The radio's Tracker screen shows the role, the channel, the last fix it sent, and `NO FIX` with an age when the GPS has been dark for a minute. Radio setup is written up in [MeshCoreTracker](https://github.com/CopIXus/MeshCoreTracker).
 
 Flash the build that matches the LoRa chip. A T-Beam SX1276 uses `Tbeam_SX1276_meshcore_tracker`. A T-Beam SX1262 uses `Tbeam_SX1262_meshcore_tracker`. The SX1262 image on an SX1276 board never finishes starting, and the OLED stays on "Loading...".
 
@@ -131,20 +131,23 @@ Flash the build that matches the LoRa chip. A T-Beam SX1276 uses `Tbeam_SX1276_m
 
 Next to the gateway, the tracker is heard directly. Farther away, the fix is a flood that repeaters carry. A repeater does not change the tracker text. It appends a path hash and increments the hop count. The gateway reads that packet, including while it is still addressed to a later hop, and the `!MT1` body is what becomes the CoT marker. A room label wrapped around the callsign (`Room: Callsign: !MT1;...`) is still accepted.
 
-Many repeaters drop a flood that has no region. On the TennMesh East network the region name is `tn-east`. From the tracker USB console:
+Leave the tracker on `scope off`. An unscoped flood is what a stock repeater forwards. A scoped flood (`scope some-region`) is dropped by every repeater that does not have that exact region name, with flood allowed. Region names are case-sensitive, and they are not the channel key. Set a scope only after you have seen multi-hop `flood-scope` traffic on the gateway and confirmed the name. From the tracker USB console:
 
 ```text
-scope tn-east
+scope off
+status
 ```
 
-`scope off` clears it. `status` prints the region in use, and each send line includes it. The region is a flood transport key, derived the same way a repeater derives it from the name. It is not the channel key. The gateway still needs the channel key (TNTAK, or whichever private channel the tracker uses) and **tracker parsing** enabled for that channel. A repeater that was not given `tn-east` will not forward this flood. A repeater that still allows unscoped floods will carry a tracker left on `scope off`. Path hashes stay 1 byte.
+`status` must print `scope none`. It also prints how many fixes were sent, how many came back as a repeater echo (`echo N hop` on the console when one is heard), and how much other flood traffic arrived with hops. `status log` prints the trip buffer, including GPS fix lost and acquired. The gateway `status` command prints `flood hops unscoped` and `scoped`. The setup page shows the same counts under Mesh packets. Serial `regions NameA,NameB` on the gateway checks scoped floods against those names.
+
+The gateway still needs the channel key and **tracker parsing** enabled for that channel. Path hashes stay 1 byte.
 
 ## Device controls
 
 - **Button.** A click cycles the OLED pages. Holding PRG for 3 seconds opens the setup access point **`MeshCore-TAK-Setup`** for 10 minutes, even while the gateway is on Wi-Fi.
 - **Setup access point fallback.** If the gateway cannot join its Wi-Fi network for a minute, it opens the setup access point by itself.
 - **Network watchdog.** If Wi-Fi reports connected but the TAK Server has not been reachable for 3 minutes, the gateway rejoins Wi-Fi. If that does not help within another 3 minutes, it restarts.
-- **Serial, 115200 baud.** `status` prints the version, link state, memory, and Wi-Fi details. `fs` lists flash files. `ap` opens the setup access point. `factory_reset` clears Wi-Fi, TAK settings, certificates, and the logo.
+- **Serial, 115200 baud.** `status` prints the version, link state, memory, Wi-Fi details, and how many multi-hop floods were unscoped or scoped. `regions name,name` tests those scoped floods against region names. `fs` lists flash files. `ap` opens the setup access point. `factory_reset` clears Wi-Fi, TAK settings, certificates, and the logo.
 
 ## Security
 

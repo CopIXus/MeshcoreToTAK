@@ -93,6 +93,8 @@ public:
   void applyRadioFromConfig();
   void applyChannelsFromConfig();
   void requestAdvert() { _advert_due = true; }
+  // Comma-separated region names. Each later scoped flood is checked against these names.
+  void setRegionProbe(const char* csv);
   bool advertPending() const { return _advert_due; }
   unsigned long lastAdvertMs() const { return _last_advert_ms; }
   uint32_t advertsSent() const { return _adverts_sent; }

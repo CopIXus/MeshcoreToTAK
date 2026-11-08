@@ -121,6 +121,9 @@ public:
   void scanDevices(TwoWire *w);
 #endif
   void begin();
+  // Drop and restore the LoRa regulator. An ESP reset leaves that rail up, and a
+  // wedged SX1262 then fails the SPI version probe until the rail is cycled.
+  void cycleLoRaPower();
 
   #ifndef TBEAM_SUPREME_SX1262
   void onBeforeTransmit() override{

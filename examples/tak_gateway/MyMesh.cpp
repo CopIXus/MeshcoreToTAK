@@ -1,8 +1,62 @@
 #include "MyMesh.h"
 #include <SPIFFS.h>
+#include <SHA256.h>
 #include <helpers/AdvertDataHelpers.h>
+#include <helpers/TransportKeyStore.h>
 #include "tak/TakText.h"
 #include "tak/TakTrackers.h"
+
+static char probe_names[8][31];
+static int probe_count = 0;
+
+void MyMesh::setRegionProbe(const char* csv) {
+  probe_count = 0;
+  if (!csv || !csv[0] || strcmp(csv, "off") == 0 || strcmp(csv, "clear") == 0) {
+    Serial.println("[MESH] region probe off");
+    return;
+  }
+  const char* p = csv;
+  while (*p && probe_count < 8) {
+    while (*p == ' ' || *p == ',') p++;
+    if (!*p) break;
+    const char* start = p;
+    while (*p && *p != ',') p++;
+    int n = (int)(p - start);
+    while (n > 0 && start[n - 1] == ' ') n--;
+    if (start[0] == '#') {
+      start++;
+      n--;
+    }
+    if (n > 0 && n < (int)sizeof(probe_names[0])) {
+      memcpy(probe_names[probe_count], start, n);
+      probe_names[probe_count][n] = 0;
+      probe_count++;
+    }
+  }
+  Serial.printf("[MESH] region probe %d name%s\n", probe_count, probe_count == 1 ? "" : "s");
+  for (int i = 0; i < probe_count; i++) Serial.printf("  %s\n", probe_names[i]);
+}
+
+static void probeRegion(const mesh::Packet* pkt) {
+  if (!probe_count || !pkt->hasTransportCodes()) return;
+  bool any = false;
+  for (int i = 0; i < probe_count; i++) {
+    char tagged[34];
+    snprintf(tagged, sizeof(tagged), "#%s", probe_names[i]);
+    TransportKey key;
+    SHA256 sha;
+    sha.update(tagged, strlen(tagged));
+    sha.finalize(&key.key, sizeof(key.key));
+    uint16_t code = key.calcTransportCode(pkt);
+    if (code == pkt->transport_codes[0]) {
+      Serial.printf("[MESH] scope code=%04x matches region '%s'\n", code, probe_names[i]);
+      any = true;
+    }
+  }
+  if (!any) {
+    Serial.printf("[MESH] scope code=%04x no candidate matched\n", pkt->transport_codes[0]);
+  }
+}
 
 void MyMesh::beginFs() {
   BaseChatMesh::begin();
@@ -209,6 +263,15 @@ void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
   _nodes->rx.last_rx_ms = millis();
   _nodes->rx.last_rssi = radio_driver.getLastRSSI();
   _nodes->rx.last_snr = radio_driver.getLastSNR();
+  if (packet->isRouteFlood() && packet->getPathHashCount() >= 1) {
+    if (packet->hasTransportCodes()) {
+      _nodes->rx.flood_hops_scoped++;
+      _nodes->rx.last_scoped_code = packet->transport_codes[0];
+      probeRegion(packet);
+    } else {
+      _nodes->rx.flood_hops_unscoped++;
+    }
+  }
   if (packet->getPayloadType() == PAYLOAD_TYPE_GRP_TXT && packet->payload_len) {
     Serial.printf("[MESH] RX group text ch#%02x %s hops=%u hash=%u rssi=%.0f snr=%.1f\n", packet->payload[0],
                   routeName(packet), packet->getPathHashCount(), packet->getPathHashSize(), _nodes->rx.last_rssi,

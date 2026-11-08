@@ -31,7 +31,13 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
 bool radio_init() {
   fallback_clock.begin();
   rtc_clock.begin(Wire);
-  return radio.std_init(&spi);
+  board.cycleLoRaPower();
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (radio.std_init(&spi)) return true;
+    Serial.printf("radio still down, cycling LoRa power (%d)\n", attempt + 1);
+    board.cycleLoRaPower();
+  }
+  return false;
 }
 
 mesh::LocalIdentity radio_new_identity() {

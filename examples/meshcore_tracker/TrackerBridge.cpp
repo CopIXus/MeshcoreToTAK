@@ -30,6 +30,65 @@ static uint32_t sent_ms = 0;
 static bool have_fix = false;
 static const char* problem = "";
 static uint32_t problem_report_ms = 0;
+static uint32_t fixes_sent = 0;
+static uint32_t gps_forced = 0;
+static uint32_t fix_lost_count = 0;
+static uint32_t no_fix_since_ms = 0;
+static uint32_t flood_heard = 0;
+static uint32_t echo_count = 0;
+static uint8_t echo_hops = 0;
+static uint32_t echo_age_s = 0;
+static uint8_t scoped_misses = 0;
+static bool prev_scoped = false;
+static bool scope_warned = false;
+static bool last_tx_echoed = true;
+static uint8_t last_tx[184];
+static uint16_t last_tx_len = 0;
+static uint32_t last_tx_ms = 0;
+
+enum TripEv : uint8_t {
+  EV_FIX = 1,
+  EV_LOST = 2,
+  EV_SEND = 3,
+  EV_ECHO = 4,
+  EV_BAUD = 5,
+  EV_BATT = 6,
+  EV_SCOPE = 7,
+  EV_FAIL = 8,
+  EV_GPS_FORCED = 9,
+};
+
+struct TripEnt {
+  uint32_t t;
+  uint8_t ev;
+  uint32_t v;
+};
+static TripEnt trip[64];
+static uint8_t trip_n = 0;
+static uint8_t trip_i = 0;
+
+static void tripLog(uint8_t ev, uint32_t v) {
+  trip[trip_i].t = millis() / 1000;
+  trip[trip_i].ev = ev;
+  trip[trip_i].v = v;
+  trip_i = (uint8_t)((trip_i + 1) % 64);
+  if (trip_n < 64) trip_n++;
+}
+
+static const char* tripName(uint8_t ev) {
+  switch (ev) {
+    case EV_FIX: return "fix";
+    case EV_LOST: return "fix lost";
+    case EV_SEND: return "sent";
+    case EV_ECHO: return "echo";
+    case EV_BAUD: return "gps baud";
+    case EV_BATT: return "battery mV";
+    case EV_SCOPE: return "scope";
+    case EV_FAIL: return "send failed";
+    case EV_GPS_FORCED: return "gps forced on";
+    default: return "event";
+  }
+}
 
 static bool channelKeyed(const ChannelDetails& ch) {
   for (int i = 0; i < 32; i++) {
@@ -314,7 +373,7 @@ static bool scopeNameOk(const char* name) {
   if (n > 29) return false;
   for (size_t i = 0; i < n; i++) {
     char c = name[i];
-    bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
     if (!ok) return false;
   }
   return true;
@@ -331,6 +390,7 @@ static bool setFloodScope(MyMesh& mesh, const char* name) {
     return true;
   }
   if (name[0] == '#') name++;
+  if (name[0] == '$') return false;
   if (!scopeNameOk(name)) return false;
   char tagged[32];
   snprintf(tagged, sizeof(tagged), "#%s", name);
@@ -346,13 +406,13 @@ static bool setFloodScope(MyMesh& mesh, const char* name) {
 
 static void printHelp() {
   Serial.println("USB console, 115200. Settings are kept on the device.");
-  Serial.println("  status");
   Serial.println("  name <callsign>");
   Serial.println("  role <k9|veh|per|fw|ems|cmd>");
   Serial.println("  move <seconds>     how often to send while moving");
   Serial.println("  still <seconds>    how often to send while stopped");
   Serial.println("  stale <seconds>    minimum time the marker stays fresh");
-  Serial.println("  scope <region>     flood region, such as tn-east. scope off clears it");
+  Serial.println("  scope <region>     flood region, exact case. scope off sends an unscoped flood");
+  Serial.println("  status             counters. status log prints the trip buffer");
   Serial.println("  channel <slot> <name> <key>");
   Serial.println("  track <slot>");
   Serial.println("Seconds are 5 to 3600. The marker stays fresh for twice the send interval, or for stale when that is longer.");
@@ -374,9 +434,23 @@ static void printStatus(MyMesh& mesh) {
   Serial.printf("radio %.3f MHz  SF%d  BW %.1f  CR%d\n", prefs->freq, prefs->sf, prefs->bw, prefs->cr);
   if (prefs->default_scope_name[0]) {
     Serial.printf("scope %s\n", prefs->default_scope_name);
+    Serial.printf("scope %s set: only repeaters that have region %s with flood allowed will carry these fixes. use scope off for an unscoped flood\n",
+                  prefs->default_scope_name, prefs->default_scope_name);
   } else {
     Serial.println("scope none");
   }
+  Serial.printf("tx %d dBm  path hash %u\n", prefs->tx_power_dbm, (unsigned)prefs->path_hash_mode);
+  LocationProvider* gps = sensors.getLocationProvider();
+  uint32_t no_fix_s = have_fix ? 0 : (millis() - no_fix_since_ms) / 1000;
+  Serial.printf("gps %s  sats %ld  no-fix %lus  lost %lu  forced-on %lu  fixes sent %lu\n",
+                have_fix ? "fix" : "no fix", gps ? gps->satellitesCount() : 0, (unsigned long)no_fix_s,
+                (unsigned long)fix_lost_count, (unsigned long)gps_forced, (unsigned long)fixes_sent);
+  Serial.printf("radio tx flood %lu  airtime %lu ms\n", (unsigned long)mesh.getNumSentFlood(),
+                (unsigned long)mesh.getTotalAirTime());
+  Serial.printf("echoes %lu  last hops %u  last age %lus\n", (unsigned long)echo_count, (unsigned)echo_hops,
+                (unsigned long)echo_age_s);
+  Serial.printf("flood heard with hops %lu\n", (unsigned long)flood_heard);
+  if (problem[0]) Serial.printf("last problem: %s\n", problem);
   if (keyed) {
     Serial.printf("tracker slot %u  %s\n", (unsigned)cfg.channel, ch.name);
   } else {
@@ -385,6 +459,18 @@ static void printStatus(MyMesh& mesh) {
   for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
     if (!mesh.getChannel(i, ch) || !channelKeyed(ch)) continue;
     Serial.printf("  channel %d %s%s\n", i, ch.name, i == cfg.channel ? "  <- tracker" : "");
+  }
+}
+
+static void printTripLog() {
+  if (trip_n == 0) {
+    Serial.println("trip log empty");
+    return;
+  }
+  int start = trip_n < 64 ? 0 : trip_i;
+  for (int n = 0; n < trip_n; n++) {
+    const TripEnt& e = trip[(start + n) % 64];
+    Serial.printf("  %lus  %s  %lu\n", (unsigned long)e.t, tripName(e.ev), (unsigned long)e.v);
   }
 }
 
@@ -458,8 +544,9 @@ static void handleLine(MyMesh& mesh, char* text) {
     printHelp();
     return;
   }
-  if (strcmp(text, "status") == 0) {
+  if (strcmp(text, "status") == 0 || strncmp(text, "status ", 7) == 0) {
     printStatus(mesh);
+    if (strstr(text, "log")) printTripLog();
     return;
   }
   if (strncmp(text, "name ", 5) == 0 || strcmp(text, "name") == 0) {
@@ -547,18 +634,22 @@ static void handleLine(MyMesh& mesh, char* text) {
   if (strncmp(text, "scope ", 6) == 0 || strcmp(text, "scope") == 0) {
     char* arg = text + 5;
     while (*arg == ' ') arg++;
-    for (char* p = arg; *p; p++) {
-      if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
-    }
     if (!arg[0]) {
       NodePrefs* prefs = mesh.getNodePrefs();
       Serial.printf("scope %s\n", prefs->default_scope_name[0] ? prefs->default_scope_name : "none");
       return;
     }
-    if (!setFloodScope(mesh, arg)) {
-      Serial.println("scope is a lowercase region name, such as tn-east, or off");
+    if (arg[0] == '$' || (arg[0] == '#' && arg[1] == '$')) {
+      Serial.println("private $ regions use a key this radio cannot derive. Use scope off, or a public region name");
       return;
     }
+    if (!setFloodScope(mesh, arg)) {
+      Serial.println("scope is a region name (letters, digits, - or _), exact case, or off");
+      return;
+    }
+    tripLog(EV_SCOPE, mesh.getNodePrefs()->default_scope_name[0] ? 1 : 0);
+    scoped_misses = 0;
+    scope_warned = false;
     NodePrefs* prefs = mesh.getNodePrefs();
     Serial.printf("scope %s\n", prefs->default_scope_name[0] ? prefs->default_scope_name : "none");
     return;
@@ -677,6 +768,7 @@ static void openGpsUart() {
   Serial1.begin(gps_bauds[gps_baud_i]);
   Serial.printf("gps listening at %lu baud (esp rx %d tx %d)\n",
                 (unsigned long)gps_bauds[gps_baud_i], PIN_GPS_TX, PIN_GPS_RX);
+  tripLog(EV_BAUD, gps_bauds[gps_baud_i]);
 }
 
 void trackerBridgeBegin(MyMesh& mesh) {
@@ -726,7 +818,8 @@ void trackerBridgeBegin(MyMesh& mesh) {
   Serial.println("MeshCoreTracker");
   printStatus(mesh);
   Serial.println("advert location off, GPS on");
-  gps_quiet_since_ms = millis();
+  no_fix_since_ms = millis();
+  gps_quiet_since_ms = no_fix_since_ms;
   gps_report_ms = gps_quiet_since_ms + 15000;
   Serial.printf("gps listening at %lu baud (esp rx %d tx %d)\n",
                 (unsigned long)gps_bauds[0], PIN_GPS_TX, PIN_GPS_RX);
@@ -734,8 +827,30 @@ void trackerBridgeBegin(MyMesh& mesh) {
   printHelp();
 }
 
+static void keepGpsOn(MyMesh& mesh) {
+  NodePrefs* prefs = mesh.getNodePrefs();
+  bool off = !prefs->gps_enabled;
+  for (int i = 0; i < sensors.getNumSettings(); i++) {
+    const char* name = sensors.getSettingName(i);
+    if (!name || strcmp(name, "gps") != 0) continue;
+    const char* v = sensors.getSettingValue(i);
+    if (v && v[0] == '0') off = true;
+  }
+  if (!off) return;
+  static uint32_t last_force_ms = 0;
+  if (last_force_ms && (int32_t)(millis() - last_force_ms) < 5000) return;
+  last_force_ms = millis();
+  prefs->gps_enabled = 1;
+  sensors.setSettingValue("gps", "1");
+  mesh.savePrefs();
+  gps_forced++;
+  tripLog(EV_GPS_FORCED, gps_forced);
+  Serial.println("gps was switched off; turned back on");
+}
+
 void trackerBridgeLoop(MyMesh& mesh) {
   pollConsole(mesh);
+  keepGpsOn(mesh);
 
   uint32_t now_ms = millis();
   if ((int32_t)(now_ms - next_sample_ms) < 0) return;
@@ -771,10 +886,15 @@ void trackerBridgeLoop(MyMesh& mesh) {
                   gps ? gps->lastSentence() : "");
   }
   if (valid && !have_fix) {
-    Serial.printf("gps fix  sats %ld  %.5f %.5f\n", gps->satellitesCount(),
-                  gps->getLatitude() / 1000000.0, gps->getLongitude() / 1000000.0);
+    Serial.printf("gps fix  sats %ld  %.5f %.5f  up %lus\n", gps->satellitesCount(),
+                  gps->getLatitude() / 1000000.0, gps->getLongitude() / 1000000.0,
+                  (unsigned long)(now_ms / 1000));
+    tripLog(EV_FIX, (uint32_t)gps->satellitesCount());
   } else if (!valid && have_fix) {
-    Serial.println("gps fix lost");
+    Serial.printf("gps fix lost  up %lus\n", (unsigned long)(now_ms / 1000));
+    tripLog(EV_LOST, gps ? (uint32_t)gps->satellitesCount() : 0);
+    fix_lost_count++;
+    no_fix_since_ms = now_ms;
   }
   have_fix = valid;
 
@@ -854,8 +974,22 @@ void trackerBridgeLoop(MyMesh& mesh) {
       problem_report_ms = now_ms + 15000;
       Serial.println("tracker send failed, retrying");
     }
+    tripLog(EV_FAIL, sequence);
     return;
   }
+  if (prev_scoped && last_tx_len && !last_tx_echoed && scoped_misses < 255) scoped_misses++;
+  prev_scoped = prefs->default_scope_name[0] != 0;
+  if (!prev_scoped) {
+    scoped_misses = 0;
+    scope_warned = false;
+  } else if (scoped_misses >= 3 && flood_heard > 0 && !scope_warned) {
+    scope_warned = true;
+    Serial.println("scope is set and repeaters are not echoing these fixes, while other flood traffic is arriving. Try: scope off");
+  }
+  fixes_sent++;
+  tripLog(EV_SEND, sequence);
+  int mv = board.getBattMilliVolts();
+  if (mv > 0) tripLog(EV_BATT, (uint32_t)mv);
   problem = "";
   problem_report_ms = now_ms;
   announced = true;
@@ -869,6 +1003,37 @@ void trackerBridgeLoop(MyMesh& mesh) {
                 pace, (unsigned)decision.interval_s, slot,
                 prefs->default_scope_name[0] ? prefs->default_scope_name : "none",
                 prefs->node_name, body);
+}
+
+void trackerBridgeOnTx(mesh::Packet* pkt) {
+  if (!pkt || pkt->getPayloadType() != PAYLOAD_TYPE_GRP_TXT) return;
+  uint16_t n = pkt->payload_len;
+  if (n > sizeof(last_tx)) n = sizeof(last_tx);
+  memcpy(last_tx, pkt->payload, n);
+  last_tx_len = n;
+  last_tx_ms = millis();
+  last_tx_echoed = false;
+}
+
+void trackerBridgeOnRx(mesh::Packet* pkt) {
+  if (!pkt) return;
+  uint8_t hops = pkt->getPathHashCount();
+  bool echo = last_tx_len && pkt->getPayloadType() == PAYLOAD_TYPE_GRP_TXT && pkt->payload_len == last_tx_len &&
+              memcmp(pkt->payload, last_tx, last_tx_len) == 0;
+  if (echo && hops >= 1) {
+    echo_hops = hops;
+    echo_age_s = last_tx_ms ? (millis() - last_tx_ms) / 1000 : 0;
+    if (!last_tx_echoed) {
+      last_tx_echoed = true;
+      echo_count++;
+      scoped_misses = 0;
+      scope_warned = false;
+      tripLog(EV_ECHO, hops);
+      Serial.printf("echo %u hop\n", (unsigned)hops);
+    }
+    return;
+  }
+  if (pkt->isRouteFlood() && hops >= 1) flood_heard++;
 }
 
 void trackerBridgeCopyStatus(MyMesh& mesh, TrackerScreenInfo* out) {
@@ -888,4 +1053,13 @@ void trackerBridgeCopyStatus(MyMesh& mesh, TrackerScreenInfo* out) {
   out->lon = sent_lon;
   out->sequence = sent_seq;
   if (ever_sent) out->age_s = (millis() - sent_ms) / 1000;
+  out->no_fix_s = have_fix ? 0 : (millis() - no_fix_since_ms) / 1000;
+  out->fixes_sent = fixes_sent;
+  out->echoes = echo_count;
+  out->echo_hops = echo_hops;
+  out->flood_heard = flood_heard;
+  NodePrefs* prefs = mesh.getNodePrefs();
+  if (prefs->default_scope_name[0]) {
+    strncpy(out->scope, prefs->default_scope_name, sizeof(out->scope) - 1);
+  }
 }
