@@ -375,18 +375,27 @@ public:
       display.drawTextLeftAlign(0, y, buf);
       y += 12;
       display.setColor(UIColor::primary_txt);
-      if (info.sent) {
+      if (!info.has_fix && info.no_fix_s >= 60) {
+        snprintf(buf, sizeof(buf), "NO FIX %lum", (unsigned long)(info.no_fix_s / 60));
+      } else if (info.sent) {
         snprintf(buf, sizeof(buf), "%.5f %.5f", info.lat, info.lon);
       } else {
-        snprintf(buf, sizeof(buf), "no fix sent");
+        snprintf(buf, sizeof(buf), info.has_fix ? "gps fix, not sent" : "no fix sent");
       }
       display.drawTextLeftAlign(0, y, buf);
       y += 12;
       display.setColor(UIColor::secondary_txt);
-      if (info.sent) {
-        snprintf(buf, sizeof(buf), "sent %lus  q%lu", (unsigned long)info.age_s, (unsigned long)info.sequence);
-      } else if (!info.keyed) {
+      if (!info.keyed) {
         snprintf(buf, sizeof(buf), "set a channel");
+      } else if (!info.has_fix && info.no_fix_s >= 60) {
+        snprintf(buf, sizeof(buf), "echo %lu  flood %lu", (unsigned long)info.echoes, (unsigned long)info.flood_heard);
+      } else if (info.problem[0]) {
+        snprintf(buf, sizeof(buf), "%s", info.problem);
+      } else if (info.sent) {
+        snprintf(buf, sizeof(buf), "sent %lus e%lu h%u", (unsigned long)info.age_s, (unsigned long)info.echoes,
+                 (unsigned)info.echo_hops);
+      } else if (info.has_fix) {
+        snprintf(buf, sizeof(buf), "sending...");
       } else {
         snprintf(buf, sizeof(buf), "waiting for GPS");
       }

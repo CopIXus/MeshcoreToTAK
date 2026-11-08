@@ -283,6 +283,29 @@ uint8_t MyMesh::getExtraAckTransmitCount() const {
   return _prefs.multi_acks;
 }
 
+#ifdef MESHCORE_TRACKER
+#include "../meshcore_tracker/TrackerBridge.h"
+#endif
+
+void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
+  (void)len;
+  (void)score;
+#ifdef MESHCORE_TRACKER
+  trackerBridgeOnRx(packet);
+#else
+  (void)packet;
+#endif
+}
+
+void MyMesh::logTx(mesh::Packet* packet, int len) {
+  (void)len;
+#ifdef MESHCORE_TRACKER
+  trackerBridgeOnTx(packet);
+#else
+  (void)packet;
+#endif
+}
+
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
   if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
     int i = 0;

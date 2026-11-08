@@ -49,6 +49,27 @@ void TBeamBoard::begin() {
     }
 }
 
+void TBeamBoard::cycleLoRaPower() {
+  if (!PMU) return;
+  uint8_t channel;
+  if (PMU->getChipModel() == XPOWERS_AXP192) {
+    channel = XPOWERS_LDO2;
+  } else if (PMU->getChipModel() == XPOWERS_AXP2101) {
+#ifdef TBEAM_SUPREME_SX1262
+    channel = XPOWERS_ALDO3;
+#else
+    channel = XPOWERS_ALDO2;
+#endif
+  } else {
+    return;
+  }
+  PMU->disablePowerOutput(channel);
+  delay(20);
+  PMU->setPowerChannelVoltage(channel, 3300);
+  PMU->enablePowerOutput(channel);
+  delay(50);
+}
+
 #ifdef MESH_DEBUG
 void TBeamBoard::scanDevices(TwoWire *w)
 {

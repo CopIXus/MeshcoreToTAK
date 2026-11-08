@@ -7,9 +7,14 @@ on:
     branches: [main]
     paths:
       - 'examples/tak_gateway/**'
+      - 'examples/meshcore_tracker/**'
       - 'src/**'
       - 'variants/heltec_v3/**'
+      - 'variants/lilygo_tbeam_SX1262/**'
+      - 'variants/lilygo_tbeam_SX1276/**'
       - 'platformio.ini'
+      - 'CHANGELOG.md'
+      - 'README.md'
       - '.github/workflows/tak-gateway-release.yml'
   workflow_dispatch:
 
@@ -64,11 +69,21 @@ jobs:
           {
             echo "MeshCore TAK Gateway for Heltec V3, version **$VER** (UTC $(date -u -d @"$(git log -1 --format=%ct)" '+%Y-%m-%d %H:%M')Z)."
             echo
-            echo "Changes: $(git log -1 --format=%s)"
-            echo
             echo "- **Update over the air:** open the gateway web page, System > Firmware > Install update"
             echo "  (or upload \`tak_gateway_heltec_v3.bin\` there)."
             echo "- **First install over USB:** flash \`tak_gateway_heltec_v3_full.bin\` at offset 0x0."
+            echo
+            if [ -f CHANGELOG.md ]; then
+              echo "## Changes"
+              echo
+              awk '
+                /^## [Uu]nreleased/ { show=1; next }
+                /^## / { if (show) exit }
+                show { print }
+              ' CHANGELOG.md
+            else
+              echo "Changes: $(git log -1 --format=%s)"
+            fi
           } > out/notes.md
           cat out/version.txt
 

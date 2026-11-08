@@ -76,7 +76,7 @@ python examples/tak_gateway/tools/build_web_assets.py
 The version is the UTC (Zulu) time the code was finished, `YY.MMDD.HHMM`. `26.1002.1349` is 2 Oct 2026, 13:49Z. It is shown on the setup page, the OLED at boot, and the serial log.
 
 - A build from a clean checkout uses the last commit's time, so it matches that commit's GitHub release. A build with uncommitted changes uses the build time.
-- A push to `main` that touches the gateway publishes a GitHub release (`.github/workflows/tak-gateway-release.yml`) with `tak_gateway_heltec_v3.bin` (over-the-air), `tak_gateway_heltec_v3_full.bin` (USB flash at `0x0`), and `version.txt`.
+- A push to `main` that touches the gateway publishes a GitHub release (`.github/workflows/tak-gateway-release.yml`) with `tak_gateway_heltec_v3.bin` (over-the-air), `tak_gateway_heltec_v3_full.bin` (USB flash at `0x0`), and `version.txt`. The release notes are the `Unreleased` section of [CHANGELOG.md](CHANGELOG.md). Put new user-visible changes there before merging to `main`.
 - The gateway checks the latest release 10 minutes after boot, then every 6 hours. The TAK link pauses during a check or an install, because the device has no spare memory for a second TLS session. **Install update** downloads it, checks it, and restarts. You can also upload a `.bin` under **System → Firmware**.
 - Downloads are checked against the GitHub root certificates in `tak/TakUpdateRoots.h`. If GitHub changes certificate authority, regenerate that file with `python examples/tak_gateway/tools/make_update_roots.py`.
 
@@ -123,14 +123,31 @@ Turn **tracker parsing** on for that private channel and use the same channel ke
 
 An unknown role uses that channel's fallback style. A per-id row can change one tracker's callsign or picture without changing the radio.
 
-The MeshCore Android app can set the tracker's name and its channel. It has no command for the role, the send interval, or how long the marker stays fresh. Those are set from the radio's USB console at 115200 baud: `role`, `move`, `still`, `stale`, `name`, `channel`, and `status`. The radio's Tracker screen shows the role, the channel, and the last fix it sent. Radio setup is written up in [MeshCoreTracker](https://github.com/CopIXus/MeshCoreTracker). The T-Beam firmware in this repository is `Tbeam_SX1276_meshcore_tracker` or `Tbeam_SX1262_meshcore_tracker`.
+The MeshCore Android app can set the tracker's name and its channel. It has no command for the role, the send interval, how long the marker stays fresh, or which flood region the fix uses. Those are set from the radio's USB console at 115200 baud: `role`, `move`, `still`, `stale`, `name`, `channel`, `scope`, and `status`. `status log` prints what the radio did on the last trip. The radio's Tracker screen shows the role, the channel, the last fix it sent, and `NO FIX` with an age when the GPS has been dark for a minute. Radio setup is written up in [MeshCoreTracker](https://github.com/CopIXus/MeshCoreTracker).
+
+Flash the build that matches the LoRa chip. A T-Beam SX1276 uses `Tbeam_SX1276_meshcore_tracker`. A T-Beam SX1262 uses `Tbeam_SX1262_meshcore_tracker`. The SX1262 image on an SX1276 board never finishes starting, and the OLED stays on "Loading...".
+
+### Through a repeater
+
+Next to the gateway, the tracker is heard directly. Farther away, the fix is a flood that repeaters carry. A repeater does not change the tracker text. It appends a path hash and increments the hop count. The gateway reads that packet, including while it is still addressed to a later hop, and the `!MT1` body is what becomes the CoT marker. A room label wrapped around the callsign (`Room: Callsign: !MT1;...`) is still accepted.
+
+Leave the tracker on `scope off`. An unscoped flood is what a stock repeater forwards. A scoped flood (`scope some-region`) is dropped by every repeater that does not have that exact region name, with flood allowed. Region names are case-sensitive, and they are not the channel key. Set a scope only after you have seen multi-hop `flood-scope` traffic on the gateway and confirmed the name. From the tracker USB console:
+
+```text
+scope off
+status
+```
+
+`status` must print `scope none`. It also prints how many fixes were sent, how many came back as a repeater echo (`echo N hop` on the console when one is heard), and how much other flood traffic arrived with hops. `status log` prints the trip buffer, including GPS fix lost and acquired. The gateway `status` command prints `flood hops unscoped` and `scoped`. The setup page shows the same counts under Mesh packets. Serial `regions NameA,NameB` on the gateway checks scoped floods against those names.
+
+The gateway still needs the channel key and **tracker parsing** enabled for that channel. Path hashes stay 1 byte.
 
 ## Device controls
 
 - **Button.** A click cycles the OLED pages. Holding PRG for 3 seconds opens the setup access point **`MeshCore-TAK-Setup`** for 10 minutes, even while the gateway is on Wi-Fi.
 - **Setup access point fallback.** If the gateway cannot join its Wi-Fi network for a minute, it opens the setup access point by itself.
 - **Network watchdog.** If Wi-Fi reports connected but the TAK Server has not been reachable for 3 minutes, the gateway rejoins Wi-Fi. If that does not help within another 3 minutes, it restarts.
-- **Serial, 115200 baud.** `status` prints the version, link state, memory, and Wi-Fi details. `fs` lists flash files. `ap` opens the setup access point. `factory_reset` clears Wi-Fi, TAK settings, certificates, and the logo.
+- **Serial, 115200 baud.** `status` prints the version, link state, memory, Wi-Fi details, and how many multi-hop floods were unscoped or scoped. `regions name,name` tests those scoped floods against region names. `fs` lists flash files. `ap` opens the setup access point. `factory_reset` clears Wi-Fi, TAK settings, certificates, and the logo.
 
 ## Security
 
@@ -148,6 +165,8 @@ The MeshCore Android app can set the tracker's name and its channel. It has no c
 | `images/` | The pictures in this README |
 | `examples/tak_gateway/tools/` | Page assets, version stamp, update root CAs, Portal certificate install |
 | `examples/tak_gateway/docs/` | Design notes, including the removed TAK → mesh chat |
+| `examples/meshcore_tracker/` | T-Beam tracker bridge, including the `scope` command |
+| `CHANGELOG.md` | What the next GitHub release will say |
 | `variants/heltec_v3/platformio.ini` | `Heltec_v3_tak_gateway` build environment |
 
 ## Credits and license

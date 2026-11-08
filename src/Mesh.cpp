@@ -106,7 +106,9 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
         return ACTION_RETRANSMIT_DELAYED(0, d);  // Routed traffic is HIGHEST priority 
       }
     }
-    return ACTION_RELEASE;   // this node is NOT the next hop (OR this packet has already been forwarded), so discard.
+    // Not the next hop. Repeaters stop here. A listener can still read the payload:
+    // repeaters do not alter it, they only keep the remaining path hashes in front.
+    if (!overhearRoutedDirect(pkt->getPayloadType())) return ACTION_RELEASE;
   }
 
   if (pkt->isRouteFlood() && filterRecvFloodPacket(pkt)) return ACTION_RELEASE;
@@ -236,15 +238,18 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
         GroupChannel channels[4];
         int num = searchChannelsByHash(&channel_hash, channels, 4);
         // for each matching channel, try to decrypt data
+        bool opened = false;
         for (int j = 0; j < num; j++) {
           // decrypt, checking MAC is valid
           uint8_t data[MAX_PACKET_PAYLOAD];
           int len = Utils::MACThenDecrypt(channels[j].secret, data, macAndData, pkt->payload_len - i);
           if (len > 0) {  // success!
             onGroupDataRecv(pkt, pkt->getPayloadType(), channels[j], data, len);
+            opened = true;
             break;
           }
         }
+        if (!opened) onGroupDecryptFailed(pkt, channel_hash);
         action = routeRecvPacket(pkt);
       }
       break;
@@ -285,6 +290,7 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
           action = routeRecvPacket(pkt);
         } else {
           MESH_DEBUG_PRINTLN("%s Mesh::onRecvPacket(): received advertisement with forged signature! (app_data_len=%d)", getLogDateTime(), app_data_len);
+          onAdvertSignatureFailed(pkt, app_data_len);
         }
       }
       break;

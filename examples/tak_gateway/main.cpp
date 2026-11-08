@@ -73,6 +73,9 @@ static void handleSerial() {
                       (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(), WiFi.RSSI(),
                       WiFi.gatewayIP().toString().c_str(), WiFi.dnsIP().toString().c_str(),
                       tak_client.netOkMs() ? (millis() - tak_client.netOkMs()) / 1000 : 0);
+        Serial.printf("flood hops unscoped=%lu scoped=%lu last_scope_code=%04x\n",
+                      (unsigned long)tak_nodes.rx.flood_hops_unscoped, (unsigned long)tak_nodes.rx.flood_hops_scoped,
+                      tak_nodes.rx.last_scoped_code);
         TaskHandle_t web = xTaskGetHandle("async_tcp");
         Serial.printf("stack_free loop=%u web=%u queued=%d\n", (unsigned)uxTaskGetStackHighWaterMark(nullptr),
                       web ? (unsigned)uxTaskGetStackHighWaterMark(web) : 0, tak_client.queued());
@@ -85,11 +88,15 @@ static void handleSerial() {
         Serial.println("OK factory reset, restarting");
         delay(500);
         ESP.restart();
+      } else if (line == "regions" || line.startsWith("regions ")) {
+        String arg = line.length() > 8 ? line.substring(8) : String();
+        arg.trim();
+        the_mesh.setRegionProbe(arg.c_str());
       } else if (line == "ap") {
         tak_web.openSetupAp();
         Serial.printf("OK setup AP MeshCore-TAK-Setup pwd=%s -> http://192.168.4.1\n", tak_config.prefs.ap_password);
       } else if (line.length()) {
-        Serial.println("cmds: status | fs | ap | factory_reset");
+        Serial.println("cmds: status | fs | ap | regions name,name | factory_reset");
       }
       line = "";
     } else {

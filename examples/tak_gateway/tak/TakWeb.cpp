@@ -804,6 +804,9 @@ String TakWeb::statusJson() const {
   j += "\"error\":\"" + jsonEsc(String(_client ? _client->lastError() : "")) + "\",";
   const TakRxStats& rx = tak_nodes.rx;
   j += "\"rx_packets\":" + String(rx.packets) + ",";
+  j += "\"flood_hops\":" + String(rx.flood_hops_unscoped) + ",";
+  j += "\"flood_hops_scoped\":" + String(rx.flood_hops_scoped) + ",";
+  j += "\"scope_code\":" + String(rx.last_scoped_code) + ",";
   j += "\"rx_ago\":\"" + (rx.packets ? String((millis() - rx.last_rx_ms) / 1000UL) + "s" : String("")) + "\",";
   j += "\"rx_rssi\":" + String(rx.last_rssi, 0) + ",";
   j += "\"rx_snr\":" + String(rx.last_snr, 1) + ",";

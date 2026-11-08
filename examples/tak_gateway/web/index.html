@@ -436,7 +436,8 @@ function setStatus(j){
     ['Trackers to TAK',j.tak_trackers??'—',[trk.length+' tracked · '+(j.trk_heard||0)+' heard',j.tak_trackers?'last '+j.tak_trk_name+' · '+ago(j.tak_trk_ago):'none yet']
       .concat(j.trk_bad?['!'+j.trk_bad+' unreadable']:[]),j.tak_trackers?'ok':'','Tracker fixes written to the TAK server'],
     ['Chat to TAK',j.chat_m2t||0,['mesh → TAK','last '+ago(j.chat_ago)]],
-    ['Mesh packets',j.rx_packets??'—',[(rxOld&&j.rx_packets?'!':'')+'last '+ago(j.rx_last_ago),j.rx_packets?'RSSI '+j.rx_rssi+' · SNR '+j.rx_snr:''],
+    ['Mesh packets',j.rx_packets??'—',[(rxOld&&j.rx_packets?'!':'')+'last '+ago(j.rx_last_ago),
+      (j.rx_packets?'RSSI '+j.rx_rssi+' · SNR '+j.rx_snr:'')+((j.flood_hops||j.flood_hops_scoped)?' · flood '+(j.flood_hops||0)+' · scoped '+(j.flood_hops_scoped||0):'')],
       j.rx_packets?(rxOld?'warn':'ok'):'warn'],
     ['Adverts heard',j.adverts??'—',[(j.adverts_gps||0)+' with GPS · last GPS '+ago(j.gps_ago),
       j.last_advert?j.last_advert+' · '+ago(j.adv_heard_ago):'none yet']],

@@ -20,6 +20,9 @@ struct TakRxStats {
   uint32_t packets = 0;      // any MeshCore packet decoded by the radio
   uint32_t adverts = 0;      // adverts heard (with or without position)
   uint32_t adverts_gps = 0;  // adverts that carried a usable position
+  uint32_t flood_hops_unscoped = 0;  // flood packets that already passed through a repeater
+  uint32_t flood_hops_scoped = 0;    // same, but carrying a region transport code
+  uint16_t last_scoped_code = 0;
   uint32_t last_rx_ms = 0;
   uint32_t last_advert_ms = 0;
   uint32_t last_gps_ms = 0;  // last advert that carried a position

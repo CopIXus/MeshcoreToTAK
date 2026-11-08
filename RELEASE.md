@@ -1,5 +1,7 @@
 # Releasing Firmware
 
+TAK Gateway releases are separate from the tags below. A push to `main` that changes the gateway, the tracker, or `CHANGELOG.md` builds the Heltec image and publishes a release. The release notes are the `Unreleased` section of [CHANGELOG.md](CHANGELOG.md). Move that section under the published version after the release exists, and leave a new empty `Unreleased` section.
+
 GitHub Actions is set up to automatically build and release firmware.
 
 It will automatically build firmware when one of the following tag formats are pushed.

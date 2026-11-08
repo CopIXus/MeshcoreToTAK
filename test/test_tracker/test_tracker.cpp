@@ -74,6 +74,8 @@ TEST(TakTrackerSequence, DuplicateNewerOlderAndWrap) {
   EXPECT_EQ(TakSeqResult::Older, TakTracker::sequence(true, 10, 9));
   EXPECT_EQ(TakSeqResult::Accept, TakTracker::sequence(true, 0xFFFFFFF0u, 0x10u));
   EXPECT_EQ(TakSeqResult::Older, TakTracker::sequence(true, 0x10u, 0xFFFFFFF0u));
+  EXPECT_EQ(TakSeqResult::Accept, TakTracker::sequence(true, 1794177206u, 1u));
+  EXPECT_EQ(TakSeqResult::Older, TakTracker::sequence(true, 100000u, 99000u));
 }
 
 int main(int argc, char** argv) {
