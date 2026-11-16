@@ -16,6 +16,7 @@ struct TakTrackerStats {
   uint32_t out_of_order = 0;
   uint32_t parse_errors = 0;
   uint32_t sent = 0;
+  uint32_t superseded = 0;
 };
 
 struct TakTrackerRecord {
@@ -46,6 +47,8 @@ struct TakTrackerRecord {
   uint32_t last_sent_ms;
   float rssi;
   float snr;
+  uint8_t hops;
+  bool superseded;
 };
 
 class TakClient;
@@ -57,7 +60,7 @@ public:
   void clear();
   // !MT1 on a channel that accepts tracker messages. Never turns the text into chat.
   void ingest(TakClient* client, const TakPrefs& prefs, int channel, const char* sender, const char* text,
-              uint32_t msg_unix, float rssi, float snr);
+              uint32_t msg_unix, float rssi, float snr, uint8_t hops);
   void markStyleDirty(time_t now);
   void flush(TakClient& client);
   int count() const { return _count; }

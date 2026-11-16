@@ -1,5 +1,7 @@
 #include "TakUpdate.h"
 #include "TakClient.h"
+#include "TakConfig.h"
+#include "TakOtaHealth.h"
 #include "TakUpdateRoots.h"
 #include "TakVersion.h"
 #include <HTTPClient.h>
@@ -16,7 +18,8 @@
 #endif
 
 #define RELEASE_URL "https://github.com/" TAK_UPDATE_REPO "/releases/latest"
-#define DOWNLOAD_URL RELEASE_URL "/download/"
+#define LATEST_DOWNLOAD_URL RELEASE_URL "/download/"
+#define TAG_DOWNLOAD_PREFIX "https://github.com/" TAK_UPDATE_REPO "/releases/download/"
 
 static const unsigned long CHECK_EVERY_MS = 6UL * 3600UL * 1000UL;
 static const unsigned long RETRY_MS = 3600UL * 1000UL;
@@ -24,8 +27,18 @@ static const uint32_t MIN_TLS_BLOCK = 40000;
 
 TakUpdate tak_update;
 
+void TakUpdate::begin(TakClient* client, TakConfig* cfg) {
+  _client = client;
+  _cfg = cfg;
+}
+
 const char* TakUpdate::current() { return TAK_GW_VERSION; }
 const char* TakUpdate::releaseUrl() { return RELEASE_URL; }
+const char* TakUpdate::skippedVersion() const { return TakOtaHealth::skippedVersion(); }
+const char* TakUpdate::skipReason() const { return TakOtaHealth::lastFailReason(); }
+uint8_t TakUpdate::autoMode() const {
+  return _cfg ? _cfg->prefs.auto_update : TAK_AUTO_UPDATE_AUTO;
+}
 
 // YY.MMDD.HHMM is fixed width, so a plain string compare orders versions by time.
 static bool validVersion(const String& v) {
@@ -36,7 +49,11 @@ static bool validVersion(const String& v) {
   return true;
 }
 
-bool TakUpdate::available() const { return _latest[0] && strcmp(_latest, current()) > 0; }
+bool TakUpdate::available() const {
+  if (!_latest[0] || strcmp(_latest, current()) <= 0) return false;
+  if (TakOtaHealth::shouldSkip(_latest)) return false;
+  return true;
+}
 
 const char* TakUpdate::stateName() const {
   switch (_state) {
@@ -57,11 +74,26 @@ void TakUpdate::setMsg(TakUpdState s, const char* fmt, ...) {
   Serial.printf("[OTA] %s\n", _msg);
 }
 
+String TakUpdate::downloadUrl(const char* asset) const {
+  // Pin to the version we just read so a newer release cannot race the install.
+  if (_latest[0] && validVersion(String(_latest))) {
+    return String(TAG_DOWNLOAD_PREFIX) + _latest + "/" + asset;
+  }
+  return String(LATEST_DOWNLOAD_URL) + asset;
+}
+
 void TakUpdate::loop() {
   if (_reboot_at && (long)(millis() - _reboot_at) > 0) ESP.restart();
   if (_running || _uploading || _state == TakUpdState::Rebooting) return;
   if (WiFi.status() != WL_CONNECTED || time(nullptr) < 1700000000) return;
-  if ((long)(millis() - _next_check_ms) >= 0) requestCheck();
+  if ((long)(millis() - _next_check_ms) >= 0) {
+    uint8_t mode = autoMode();
+    if (mode == TAK_AUTO_UPDATE_OFF) {
+      _next_check_ms = millis() + CHECK_EVERY_MS;
+      return;
+    }
+    start(mode == TAK_AUTO_UPDATE_AUTO ? Job::CheckAndMaybeInstall : Job::Check);
+  }
 }
 
 bool TakUpdate::start(Job job) {
@@ -81,7 +113,11 @@ bool TakUpdate::requestCheck() { return start(Job::Check); }
 
 bool TakUpdate::requestInstall(String& why) {
   if (!available()) {
-    why = _latest[0] ? "Already running the latest version" : "Check for updates first";
+    if (_latest[0] && TakOtaHealth::shouldSkip(_latest)) {
+      why = String("Skipped bad version ") + _latest;
+    } else {
+      why = _latest[0] ? "Already running the latest version" : "Check for updates first";
+    }
     return false;
   }
   if (!start(Job::Install)) {
@@ -95,12 +131,27 @@ bool TakUpdate::requestInstall(String& why) {
 void TakUpdate::taskEntry(void* arg) {
   TakUpdate* u = (TakUpdate*)arg;
   String err;
-  bool ok = u->_job == Job::Check ? u->doCheck(err) : u->doInstall(err);
+  bool ok = false;
+  if (u->_job == Job::Check || u->_job == Job::CheckAndMaybeInstall) {
+    ok = u->doCheck(err);
+    if (ok && u->_job == Job::CheckAndMaybeInstall && u->available()) {
+      TakOtaHealth::noteAttempt(u->_latest);
+      ok = u->doInstall(err);
+      if (!ok) {
+        // Attempt already counted; a second failure of the same version skips it.
+      }
+    }
+  } else {
+    TakOtaHealth::noteAttempt(u->_latest);
+    ok = u->doInstall(err);
+  }
   if (!ok) {
     u->setMsg(TakUpdState::Failed, "%s", err.c_str());
-    if (u->_job == Job::Check) u->_next_check_ms = millis() + RETRY_MS;
+    if (u->_job != Job::Install) u->_next_check_ms = millis() + RETRY_MS;
   }
-  if ((!ok || u->_job == Job::Check) && u->_client) u->_client->pause(false);
+  if ((!ok || u->_job == Job::Check || (u->_job == Job::CheckAndMaybeInstall && !u->available())) && u->_client) {
+    u->_client->pause(false);
+  }
   u->_running = false;
   vTaskDelete(nullptr);
 }
@@ -151,7 +202,8 @@ bool TakUpdate::doCheck(String& err) {
   WiFiClientSecure tls;
   secure(tls);
   HTTPClient http;
-  int code = openUrl(http, tls, DOWNLOAD_URL "version.txt");
+  // version.txt always comes from latest so we learn the newest tag, then pin the .bin download.
+  int code = openUrl(http, tls, String(LATEST_DOWNLOAD_URL) + "version.txt");
   if (code != 200) {
     http.end();
     err = code == 404 ? String("No release published on GitHub yet")
@@ -161,10 +213,10 @@ bool TakUpdate::doCheck(String& err) {
   String body = http.getString();
   http.end();
 
-  // version.txt: version, MD5 of the .bin, size of the .bin (one per line)
-  String lines[3];
+  // version.txt: version, MD5 of the .bin, size of the .bin (one per line); optional SHA-256 on line 4
+  String lines[4];
   int n = 0, from = 0;
-  while (n < 3 && from <= (int)body.length()) {
+  while (n < 4 && from <= (int)body.length()) {
     int nl = body.indexOf('\n', from);
     if (nl < 0) nl = body.length();
     lines[n] = body.substring(from, nl);
@@ -182,6 +234,10 @@ bool TakUpdate::doCheck(String& err) {
   _size = lines[2].toInt();
   _checked_ms = millis();
   _next_check_ms = _checked_ms + CHECK_EVERY_MS;
+  if (TakOtaHealth::shouldSkip(_latest)) {
+    setMsg(TakUpdState::Idle, "Skipping bad version %s", _latest);
+    return true;
+  }
   int cmp = strcmp(_latest, current());
   setMsg(TakUpdState::Idle, cmp > 0 ? "Update %s available" : cmp < 0 ? "Running a newer build than GitHub (%s)" : "Up to date (%s)",
          _latest);
@@ -195,7 +251,7 @@ bool TakUpdate::doInstall(String& err) {
   WiFiClientSecure tls;
   secure(tls);
   HTTPClient http;
-  int code = openUrl(http, tls, DOWNLOAD_URL TAK_UPDATE_ASSET);
+  int code = openUrl(http, tls, downloadUrl(TAK_UPDATE_ASSET));
   if (code != 200) {
     http.end();
     err = String("Download failed (") + (code < 0 ? http.errorToString(code) : String("HTTP ") + code) + ")";
@@ -284,6 +340,7 @@ bool TakUpdate::uploadEnd(String& err) {
     setMsg(TakUpdState::Failed, "%s", err.c_str());
     return false;
   }
+  TakOtaHealth::noteAttempt("upload");
   setMsg(TakUpdState::Rebooting, "Uploaded firmware installed, restarting");
   _reboot_at = millis() + 1500;
   return true;

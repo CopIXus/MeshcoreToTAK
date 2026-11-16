@@ -9,6 +9,17 @@ static const int ROW[4] = {20, 31, 42, 53};
 void TakDisplay::begin() {
 #ifdef DISPLAY_CLASS
   // display already begun in main
+  _last_activity = millis();
+#endif
+}
+
+void TakDisplay::wake() {
+#ifdef DISPLAY_CLASS
+  _last_activity = millis();
+  if (_asleep) {
+    _asleep = false;
+    draw();
+  }
 #endif
 }
 
@@ -162,8 +173,16 @@ void TakDisplay::drawLast() {
     snprintf(line, sizeof(line), "no gps: %s", _nodes->rx.last_advert_name);
     display.drawTextEllipsized(0, ROW[1], display.width(), line);
   }
-  if (_nodes && _nodes->rx.packets) {
-    snprintf(line, sizeof(line), "rssi %.0f snr %.1f", _nodes->rx.last_rssi, _nodes->rx.last_snr);
+  if (_nodes) {
+    float best = 0, med = 0, snr = 0;
+    uint16_t dn = 0, rn = 0;
+    if (_nodes->rx.directStats(millis(), 600000UL, best, med, snr, dn, rn)) {
+      snprintf(line, sizeof(line), "best %.0f snr %.1f", best, snr);
+    } else if (_nodes->rx.packets) {
+      snprintf(line, sizeof(line), "rssi %.0f (relay)", _nodes->rx.last_rssi);
+    } else {
+      line[0] = 0;
+    }
     display.setCursor(0, ROW[3]);
     display.print(line);
   }
@@ -219,15 +238,18 @@ void TakDisplay::loop() {
   if (down && !_btn_was) {
     _btn_down = millis();
     _long_fired = false;
+    wake();
   }
   if (down && !_long_fired && millis() - _btn_down >= LONG_PRESS_MS) {
     _long_fired = true;
     _long_pending = true;
     _page = PageWifi;
+    wake();
     draw();
   }
   if (!down && _btn_was && !_long_fired && millis() - _btn_down >= 50) {
     _page = (Page)((_page + 1) % PageCount);
+    wake();
     draw();
   }
   _btn_was = down;
@@ -236,8 +258,17 @@ void TakDisplay::loop() {
   if (_client && _client->chat.last_ms != _seen_chat_ms) {
     _seen_chat_ms = _client->chat.last_ms;
     _page = PageChat;
+    wake();
     draw();
   }
+
+  if (!_asleep && millis() - _last_activity > SLEEP_MS) {
+    _asleep = true;
+    display.startFrame();
+    display.endFrame();  // blank
+    return;
+  }
+  if (_asleep) return;
 
   if (millis() - _last_draw > 1000) {
     _last_draw = millis();

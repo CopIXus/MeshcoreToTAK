@@ -40,6 +40,43 @@ void TakCot::xmlEscape(const char* in, char* out, size_t out_len) {
   out[o] = 0;
 }
 
+// Remarks stay the role text. The gateway name is appended so a TAK map shows which
+// radio forwarded the marker when more than one gateway is publishing.
+// TAK Server files a CoT with no __group into __ANON__. The name is the server channel.
+static void formatGroup(const char* name, char* out, size_t out_len) {
+  if (!out || !out_len) return;
+  out[0] = 0;
+  if (!name || !name[0]) return;
+  char esc[TAK_CHANNEL_LABEL_LEN * 6];
+  TakCot::xmlEscape(name, esc, sizeof(esc));
+  if (!esc[0]) return;
+  snprintf(out, out_len, "<__group name='%s' role='Team Member'/>", esc);
+}
+
+void TakCot::formatRemarks(const char* role, const char* gateway, time_t seen_utc, char* out, size_t out_len) {
+  if (!out || !out_len) return;
+  out[0] = 0;
+  const char* r = role && role[0] ? role : "";
+  const char* g = gateway && gateway[0] ? gateway : "";
+  char seen[40] = {0};
+  if (seen_utc > 0) {
+    struct tm tm_buf;
+    gmtime_r(&seen_utc, &tm_buf);
+    static const char* mon[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    const char* m = (tm_buf.tm_mon >= 0 && tm_buf.tm_mon < 12) ? mon[tm_buf.tm_mon] : "???";
+    snprintf(seen, sizeof(seen), "seen %d %s %02d:%02d:%02dZ", tm_buf.tm_mday, m, tm_buf.tm_hour,
+             tm_buf.tm_min, tm_buf.tm_sec);
+  }
+  if (r[0] && g[0] && seen[0]) snprintf(out, out_len, "%s | %s | %s", r, g, seen);
+  else if (r[0] && g[0]) snprintf(out, out_len, "%s | %s", r, g);
+  else if (r[0] && seen[0]) snprintf(out, out_len, "%s | %s", r, seen);
+  else if (g[0] && seen[0]) snprintf(out, out_len, "%s | %s", g, seen);
+  else if (r[0]) snprintf(out, out_len, "%s", r);
+  else if (g[0]) snprintf(out, out_len, "%s", g);
+  else if (seen[0]) snprintf(out, out_len, "%s", seen);
+}
+
 void TakCot::formatTime(time_t t, char* buf, size_t len) {
   struct tm tm_buf;
   gmtime_r(&t, &tm_buf);
@@ -78,19 +115,24 @@ int32_t TakCot::colorToArgb(const char* hex_color, float opacity) {
   return (int32_t)((a << 24) | (r << 16) | (g << 8) | b);
 }
 
-size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node,
-                          const TakPrefs& prefs, time_t now_utc) {
-  if (!dest || dest_len < 256) return 0;
+size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node, const TakPrefs& prefs,
+                          time_t cot_time) {
+  if (!dest || dest_len < 256 || !cot_time) return 0;
   const TakCotStyle& style = TakNodes::styleFor(TakNodes::matchFilter(node.name, prefs), prefs);
-  char t0[32], t1[32], call_esc[80], rem_esc[96], icon_path[TAK_ICON_LEN + 8], usericon[200];
+  char t0[32], t1[32], call_esc[80], rem_esc[256], icon_path[TAK_ICON_LEN + 8], usericon[200];
   char type_esc[sizeof(style.type) * 6], how_esc[sizeof(style.how) * 6];
-  formatTime(now_utc, t0, sizeof(t0));
-  formatTime(now_utc + (time_t)prefs.stale_sec, t1, sizeof(t1));
+  uint16_t stale = prefs.stale_sec ? prefs.stale_sec : 600;
+  formatTime(cot_time, t0, sizeof(t0));
+  formatTime(cot_time + (time_t)stale, t1, sizeof(t1));
 
   char callsign[sizeof(node.name)];
   TakNodes::callsignFor(node.name, prefs, callsign, sizeof(callsign));
+  char remarks[192];
+  char group_xml[480];
+  formatRemarks(style.remarks, prefs.node_name, cot_time, remarks, sizeof(remarks));
+  formatGroup(prefs.channel_label, group_xml, sizeof(group_xml));
   xmlEscape(callsign, call_esc, sizeof(call_esc));
-  xmlEscape(style.remarks, rem_esc, sizeof(rem_esc));
+  xmlEscape(remarks, rem_esc, sizeof(rem_esc));
   xmlEscape(style.type, type_esc, sizeof(type_esc));
   xmlEscape(style.how, how_esc, sizeof(how_esc));
 
@@ -116,6 +158,7 @@ size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node
       "<point lat='%.6f' lon='%.6f' hae='9999999.0' ce='9999999.0' le='9999999.0'/>"
       "<detail>"
       "<contact callsign='%s'/>"
+      "%s"
       "<remarks>%s</remarks>"
       "%s"
       "<color argb='%ld' value='%ld'/>"
@@ -123,7 +166,7 @@ size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node
       "<takv device='MeshCore GPS Tracker' platform='MeshCore TAK Gateway' version='" TAK_GW_VERSION "'/>"
       "</detail>"
       "</event>",
-      node.uid, type_esc, how_esc, t0, t0, t1, node.lat, node.lon, call_esc, rem_esc, usericon,
+      node.uid, type_esc, how_esc, t0, t0, t1, node.lat, node.lon, call_esc, group_xml, rem_esc, usericon,
       (long)color, (long)color, style.archived ? "<archive/>" : "");
 
   if (n < 0 || (size_t)n >= dest_len) return 0;
@@ -133,15 +176,19 @@ size_t TakCot::buildPoint(char* dest, size_t dest_len, const TakNodeRecord& node
 size_t TakCot::buildTrackerPoint(char* dest, size_t dest_len, const char* uid, const char* callsign, double lat,
                                 double lon, bool has_alt, float alt_m, bool has_speed, float speed_mps,
                                 bool has_course, float course_deg, const TakCotStyle& style, time_t cot_time,
-                                uint16_t stale_sec) {
+                                uint16_t stale_sec, const char* gateway, const char* group) {
   if (!dest || dest_len < 256 || !uid || !uid[0] || !cot_time || !stale_sec) return 0;
-  char t0[32], t1[32], call_esc[80], rem_esc[96], icon_path[TAK_ICON_LEN + 8], usericon[200];
+  char t0[32], t1[32], call_esc[80], rem_esc[256], icon_path[TAK_ICON_LEN + 8], usericon[200];
   char type_esc[sizeof(style.type) * 6], how_esc[sizeof(style.how) * 6], track[80];
   formatTime(cot_time, t0, sizeof(t0));
   formatTime(cot_time + (time_t)stale_sec, t1, sizeof(t1));
 
+  char remarks[192];
+  char group_xml[480];
+  formatRemarks(style.remarks, gateway, cot_time, remarks, sizeof(remarks));
+  formatGroup(group, group_xml, sizeof(group_xml));
   xmlEscape(callsign ? callsign : "Tracker", call_esc, sizeof(call_esc));
-  xmlEscape(style.remarks, rem_esc, sizeof(rem_esc));
+  xmlEscape(remarks, rem_esc, sizeof(rem_esc));
   xmlEscape(style.type, type_esc, sizeof(type_esc));
   xmlEscape(style.how[0] ? style.how : "m-g", how_esc, sizeof(how_esc));
   int32_t color = colorToArgb(style.marker_color, style.marker_opacity);
@@ -183,6 +230,7 @@ size_t TakCot::buildTrackerPoint(char* dest, size_t dest_len, const char* uid, c
       "%s"
       "<detail>"
       "<contact callsign='%s'/>"
+      "%s"
       "<remarks>%s</remarks>"
       "%s"
       "%s"
@@ -191,25 +239,26 @@ size_t TakCot::buildTrackerPoint(char* dest, size_t dest_len, const char* uid, c
       "<takv device='MeshCoreTracker' platform='MeshCore TAK Gateway' version='" TAK_GW_VERSION "'/>"
       "</detail>"
       "</event>",
-      uid, type_esc, how_esc, t0, t0, t1, point_buf, call_esc, rem_esc, usericon, track, (long)color, (long)color,
+      uid, type_esc, how_esc, t0, t0, t1, point_buf, call_esc, group_xml, rem_esc, usericon, track, (long)color, (long)color,
       style.archived ? "<archive/>" : "");
 
   if (n < 0 || (size_t)n >= dest_len) return 0;
   return (size_t)n;
 }
 
-size_t TakCot::buildDelete(char* dest, size_t dest_len, const char* uid, time_t now_utc) {
-  char t0[32], t1[32];
+size_t TakCot::buildDelete(char* dest, size_t dest_len, const char* uid, time_t now_utc, const char* group) {
+  char t0[32], t1[32], group_xml[480];
   formatTime(now_utc, t0, sizeof(t0));
   formatTime(now_utc + 5, t1, sizeof(t1));
+  formatGroup(group, group_xml, sizeof(group_xml));
   int n = snprintf(
       dest, dest_len,
       "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
       "<event version='2.0' uid='%s' type='t-x-d-d' how='h-g-i-g-o' time='%s' start='%s' stale='%s'>"
       "<point lat='0' lon='0' hae='9999999.0' ce='9999999.0' le='9999999.0'/>"
-      "<detail><link uid='%s' relation='p-p'/></detail>"
+      "<detail>%s<link uid='%s' relation='p-p'/></detail>"
       "</event>",
-      uid, t0, t0, t1, uid);
+      uid, t0, t0, t1, group_xml, uid);
   if (n < 0 || (size_t)n >= dest_len) return 0;
   return (size_t)n;
 }
@@ -220,7 +269,8 @@ static void fmtPoint(float lat, float lon, char* out, size_t len) {
 }
 
 size_t TakCot::buildChat(char* dest, size_t dest_len, const char* gw_uid, const char* room,
-                         const char* sender, const char* text, float lat, float lon, time_t now_utc) {
+                         const char* sender, const char* text, float lat, float lon, time_t now_utc,
+                         const char* group) {
   char t0[32], t1[32], pt[96], room_esc[TAK_ROOM_LEN * 6], snd_esc[TAK_CALLSIGN_LEN * 6], txt_esc[1024];
   formatTime(now_utc, t0, sizeof(t0));
   formatTime(now_utc + 3600, t1, sizeof(t1));
@@ -229,7 +279,9 @@ size_t TakCot::buildChat(char* dest, size_t dest_len, const char* gw_uid, const 
   xmlEscape(sender, snd_esc, sizeof(snd_esc));
   xmlEscape(text, txt_esc, sizeof(txt_esc));
   char msg_id[24];
+  char group_xml[480];
   snprintf(msg_id, sizeof(msg_id), "%08lx%08lx", (unsigned long)now_utc, (unsigned long)esp_random());
+  formatGroup(group, group_xml, sizeof(group_xml));
 
   int n = snprintf(
       dest, dest_len,
@@ -237,12 +289,13 @@ size_t TakCot::buildChat(char* dest, size_t dest_len, const char* gw_uid, const 
       "<event version='2.0' uid='GeoChat.%s.%s.%s' type='b-t-f' how='h-g-i-g-o' time='%s' start='%s' stale='%s'>"
       "<point %s le='9999999.0'/>"
       "<detail>"
+      "%s"
       "<__chat parent='RootContactGroup' groupOwner='false' messageId='%s' chatroom='%s' id='%s' senderCallsign='%s'>"
       "<chatgrp uid0='%s' uid1='%s' id='%s'/></__chat>"
       "<link uid='%s' type='a-f-G-U-C' relation='p-p'/>"
       "<remarks source='BAO.F.ATAK.%s' to='%s' time='%s'>%s</remarks>"
       "</detail></event>",
-      gw_uid, room_esc, msg_id, t0, t0, t1, pt, msg_id, room_esc, room_esc, snd_esc, gw_uid, room_esc,
+      gw_uid, room_esc, msg_id, t0, t0, t1, pt, group_xml, msg_id, room_esc, room_esc, snd_esc, gw_uid, room_esc,
       room_esc, gw_uid, gw_uid, room_esc, t0, txt_esc);
   if (n < 0 || (size_t)n >= dest_len) return 0;
   return (size_t)n;

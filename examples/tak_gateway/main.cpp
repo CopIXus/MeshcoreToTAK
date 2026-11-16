@@ -11,6 +11,7 @@
 #include "tak/TakWeb.h"
 #include "tak/TakDisplay.h"
 #include "tak/TakUpdate.h"
+#include "tak/TakOtaHealth.h"
 #include "tak/TakVersion.h"
 
 // The TAK TLS handshake runs on loop(); 8 KB left under 2 KB spare.
@@ -95,8 +96,81 @@ static void handleSerial() {
       } else if (line == "ap") {
         tak_web.openSetupAp();
         Serial.printf("OK setup AP MeshCore-TAK-Setup pwd=%s -> http://192.168.4.1\n", tak_config.prefs.ap_password);
+      } else if (line.startsWith("name ")) {
+        String name = line.substring(5);
+        name.trim();
+        if (!name.length() || name.length() >= sizeof(tak_config.prefs.node_name)) {
+          Serial.println("name must be 1 to 31 characters");
+        } else {
+          strncpy(tak_config.prefs.node_name, name.c_str(), sizeof(tak_config.prefs.node_name) - 1);
+          tak_config.prefs.node_name[sizeof(tak_config.prefs.node_name) - 1] = 0;
+          tak_config.save();
+          requestMeshAdvert();
+          Serial.printf("OK name %s\n", tak_config.prefs.node_name);
+        }
+      } else if (line.startsWith("wifi ")) {
+        String rest = line.substring(5);
+        rest.trim();
+        int sp = rest.indexOf(' ');
+        if (sp <= 0) {
+          Serial.println("usage: wifi <ssid> <password>");
+        } else {
+          String ssid = rest.substring(0, sp);
+          String psk = rest.substring(sp + 1);
+          psk.trim();
+          if (ssid.length() >= sizeof(tak_config.prefs.wifi_ssid) || psk.length() >= sizeof(tak_config.prefs.wifi_psk)) {
+            Serial.println("ssid or password is too long");
+          } else {
+            strncpy(tak_config.prefs.wifi_ssid, ssid.c_str(), sizeof(tak_config.prefs.wifi_ssid) - 1);
+            tak_config.prefs.wifi_ssid[sizeof(tak_config.prefs.wifi_ssid) - 1] = 0;
+            strncpy(tak_config.prefs.wifi_psk, psk.c_str(), sizeof(tak_config.prefs.wifi_psk) - 1);
+            tak_config.prefs.wifi_psk[sizeof(tak_config.prefs.wifi_psk) - 1] = 0;
+            tak_config.save();
+            tak_web.startStation();
+            Serial.printf("OK wifi %s\n", tak_config.prefs.wifi_ssid);
+          }
+        }
+      } else if (line.startsWith("tak ")) {
+        String rest = line.substring(4);
+        rest.trim();
+        int sp = rest.indexOf(' ');
+        String host = sp > 0 ? rest.substring(0, sp) : rest;
+        long port = sp > 0 ? rest.substring(sp + 1).toInt() : 8089;
+        host.trim();
+        if (!host.length() || host.length() >= sizeof(tak_config.prefs.tak_host) || port < 1 || port > 65535) {
+          Serial.println("usage: tak <host> <port>");
+        } else {
+          strncpy(tak_config.prefs.tak_host, host.c_str(), sizeof(tak_config.prefs.tak_host) - 1);
+          tak_config.prefs.tak_host[sizeof(tak_config.prefs.tak_host) - 1] = 0;
+          tak_config.prefs.tak_port = (uint16_t)port;
+          tak_config.prefs.enabled = true;
+          tak_config.save();
+          if (tak_client.tlsConnected() || tak_client.state() != TakLinkState::Disabled) {
+            tak_client.reconnect();
+          } else {
+            tak_client.requestConnect();
+          }
+          Serial.printf("OK tak %s:%u\n", tak_config.prefs.tak_host, (unsigned)tak_config.prefs.tak_port);
+        }
+      } else if (line.startsWith("group ") || line == "group") {
+        String name = line.length() > 6 ? line.substring(6) : String();
+        name.trim();
+        if (!name.length() || name.length() >= sizeof(tak_config.prefs.channel_label)) {
+          Serial.println("usage: group <TAK channel>");
+        } else {
+          strncpy(tak_config.prefs.channel_label, name.c_str(), sizeof(tak_config.prefs.channel_label) - 1);
+          tak_config.prefs.channel_label[sizeof(tak_config.prefs.channel_label) - 1] = 0;
+          // Markers use __group. Chat uses the same name so it does not stay in __ANON__.
+          for (int i = 0; i < TAK_MAX_CHAT; i++) {
+            if (!tak_config.prefs.chat[i].name[0]) continue;
+            strncpy(tak_config.prefs.chat[i].room, name.c_str(), sizeof(tak_config.prefs.chat[i].room) - 1);
+            tak_config.prefs.chat[i].room[sizeof(tak_config.prefs.chat[i].room) - 1] = 0;
+          }
+          tak_config.save();
+          Serial.printf("OK group %s\n", tak_config.prefs.channel_label);
+        }
       } else if (line.length()) {
-        Serial.println("cmds: status | fs | ap | regions name,name | factory_reset");
+        Serial.println("cmds: status | fs | ap | name <callsign> | wifi <ssid> <password> | tak <host> <port> | group <TAK channel> | regions name,name | factory_reset");
       }
       line = "";
     } else {
@@ -105,14 +179,30 @@ static void handleSerial() {
   }
 }
 
-void halt() {
-  while (1) delay(1000);
+static void showFatal(const char* msg) {
+#ifdef DISPLAY_CLASS
+  display.startFrame();
+  display.drawTextCentered(display.width() / 2, 20, "FATAL");
+  display.drawTextCentered(display.width() / 2, 36, msg ? msg : "?");
+  display.endFrame();
+#endif
+  Serial.printf("[BOOT] fatal: %s\n", msg ? msg : "?");
+}
+
+void halt(const char* reason) {
+  showFatal(reason);
+  if (TakOtaHealth::pendingVerify()) {
+    TakOtaHealth::rollbackNow(reason ? reason : "boot failure");
+  }
+  delay(60000);
+  ESP.restart();
 }
 
 void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.printf("\nMeshCore TAK Gateway v%sZ\n", TAK_GW_VERSION);
+  TakOtaHealth::begin();
 
   board.begin();
 #ifdef DISPLAY_CLASS
@@ -126,28 +216,28 @@ void setup() {
 #endif
 
   if (!SPIFFS.begin(true)) {
-    Serial.println("SPIFFS mount failed");
-    halt();
+    halt("SPIFFS failed");
   }
 
   if (!radio_init()) {
-    Serial.println("Radio init failed");
-    halt();
+    halt("Radio failed");
   }
 
   fast_rng.begin(radio_driver.getRngSeed());
 
   bool had = tak_config.load();
-  Serial.printf("[CFG] loaded=%d ssid=%s host=%s preset=%s\n", had, tak_config.prefs.wifi_ssid,
-                tak_config.prefs.tak_host, tak_config.prefs.preset);
-  if (!had) tak_config.save();
+  Serial.printf("[CFG] loaded=%d failed=%d ssid=%s host=%s preset=%s name=%s\n", had, tak_config.loadFailed(),
+                tak_config.prefs.wifi_ssid, tak_config.prefs.tak_host, tak_config.prefs.preset,
+                tak_config.prefs.node_name);
+  // Only create a fresh file on true first boot. Never overwrite a corrupt file.
+  if (!had && !tak_config.loadFailed()) tak_config.save();
 
   tak_nodes.clear();
   the_mesh.beginFs();
 
   tak_client.begin(&tak_config, &tak_nodes);
   tak_web.begin(&tak_config, &tak_client, onRadioChanged);
-  tak_update.begin(&tak_client);
+  tak_update.begin(&tak_client, &tak_config);
   tak_display.setRefs(&tak_config, &tak_client, &tak_nodes);
   tak_display.begin();
 
@@ -171,6 +261,27 @@ void loop() {
   tak_display.loop();
   if (tak_display.takeLongPress()) tak_web.openSetupAp();
   handleSerial();
+
+  // Health gate for a freshly flashed OTA image: mark valid once radio, Wi-Fi and NTP are up.
+  static bool health_done = false;
+  static unsigned long health_deadline = 0;
+  if (!health_done && TakOtaHealth::pendingVerify()) {
+    if (!health_deadline) health_deadline = millis() + 5UL * 60UL * 1000UL;
+    bool wifi_ok = !tak_config.hasWifi() || WiFi.status() == WL_CONNECTED;
+    bool ntp_ok = !tak_config.hasWifi() || tak_client.ntpOk() || time(nullptr) > 1700000000;
+    if (wifi_ok && ntp_ok) {
+      TakOtaHealth::markValid();
+      // Persist v10 layout now that rollback is cancelled.
+      if (!tak_config.loadFailed()) tak_config.save();
+      health_done = true;
+    } else if ((long)(millis() - health_deadline) >= 0) {
+      // Attempt was counted when the install started; only record why we rolled back.
+      TakOtaHealth::rollbackNow("health check timed out");
+    }
+  } else if (!health_done) {
+    health_done = true;
+    TakOtaHealth::setMayWriteV10(true);
+  }
 
   // Each STA retry scans channels, which drops phones on the setup AP, so retry slower while it is up.
   static unsigned long last_wifi = 0;

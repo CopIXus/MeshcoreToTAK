@@ -1,10 +1,16 @@
 #include "TakConfig.h"
+#include "TakOtaHealth.h"
 #include <string.h>
 #include <memory>
 #include <new>
 
 static_assert(offsetof(TakPrefs, rx_port) == TAK_PREFS_V7_FILE_SIZE, "v7 config file size");
 static_assert(offsetof(TakPrefs, tracker_ch) > offsetof(TakPrefs, rx_port), "v9 tracker config must append");
+static_assert(offsetof(TakPrefs, auto_update) == TAK_PREFS_V9_FILE_SIZE, "v10 auto_update must append");
+
+static const char* CFG_PATH = "/tak/config.bin";
+static const char* CFG_TMP = "/tak/config.tmp";
+static const char* CFG_BAK = "/tak/config.bak";
 
 static void copyStr(char* dest, size_t dest_len, const char* src) {
   if (!dest || dest_len == 0) return;
@@ -14,6 +20,12 @@ static void copyStr(char* dest, size_t dest_len, const char* src) {
   }
   strncpy(dest, src, dest_len - 1);
   dest[dest_len - 1] = 0;
+}
+
+void TakConfig::ensureUniqueNodeName() {
+  if (prefs.node_name[0] && strcmp(prefs.node_name, "TAK-GW") != 0) return;
+  uint16_t suffix = (uint16_t)(ESP.getEfuseMac() & 0xFFFFULL);
+  snprintf(prefs.node_name, sizeof(prefs.node_name), "TAK-GW-%04X", (unsigned)suffix);
 }
 
 void TakConfig::setDefaults() {
@@ -27,9 +39,10 @@ void TakConfig::setDefaults() {
   prefs.name_filter = false;
   copyStr(prefs.name_prefix, sizeof(prefs.name_prefix), "tak_");
   copyStr(prefs.filt_prefix, sizeof(prefs.filt_prefix), "tak_");
-  prefs.stale_sec = 180;
+  prefs.stale_sec = 600;
   prefs.refresh_sec = 60;
   prefs.max_age_sec = 1800;
+  prefs.auto_update = TAK_AUTO_UPDATE_AUTO;
 
   copyStr(prefs.cot.type, sizeof(prefs.cot.type), "a-f-G-U-U-S-R");
   copyStr(prefs.cot.how, sizeof(prefs.cot.how), "h-g-i-g-o");
@@ -49,7 +62,7 @@ void TakConfig::setDefaults() {
   copyStr(prefs.accent, sizeof(prefs.accent), "#3dd68c");
   copyStr(prefs.chat_callsign, sizeof(prefs.chat_callsign), "MeshCore GW");
   copyStr(prefs.public_room, sizeof(prefs.public_room), "MeshCore");
-  copyStr(prefs.node_name, sizeof(prefs.node_name), "TAK-GW");
+  ensureUniqueNodeName();
   prefs.advert_on = false;
   prefs.advert_hours = 12;
 
@@ -109,43 +122,94 @@ void TakConfig::applyPreset(const char* name) {
   if (prefs.tx_power_dbm == 0) prefs.tx_power_dbm = 22;
 }
 
+bool TakConfig::readPrefsFile(const char* path, TakPrefs& out, size_t& n_out) {
+  n_out = 0;
+  if (!SPIFFS.exists(path)) return false;
+  File f = SPIFFS.open(path, "r");
+  if (!f) return false;
+  n_out = f.read((uint8_t*)&out, sizeof(out));
+  f.close();
+  return n_out > 0;
+}
+
+static bool acceptVersion(size_t n, uint16_t ver, bool& current, bool& v2, bool& v3, bool& v4, bool& v5, bool& v6,
+                          bool& v7, bool& v8, bool& v9) {
+  current = (n == sizeof(TakPrefs) && ver == TAK_CONFIG_VERSION);
+  v2 = (n == TAK_PREFS_V2_SIZE && ver == 2);
+  v3 = (n == TAK_PREFS_V3_SIZE && ver == 3);
+  v4 = (n == TAK_PREFS_V4_SIZE && ver == 4);
+  v5 = (n == TAK_PREFS_V5_SIZE && ver == 5);
+  v6 = (n == TAK_PREFS_V6_SIZE && ver == 6);
+  v7 = (n == TAK_PREFS_V7_FILE_SIZE && ver == 7);
+  v8 = (n == TAK_PREFS_V8_FILE_SIZE && ver == 8);
+  v9 = (n == TAK_PREFS_V9_FILE_SIZE && ver == 9);
+  // Also accept a truncated current-size write that still carries version 10.
+  if (!current && n >= TAK_PREFS_V9_FILE_SIZE && ver == TAK_CONFIG_VERSION && n <= sizeof(TakPrefs)) {
+    current = (n == sizeof(TakPrefs));
+    if (!current && n == TAK_PREFS_V9_FILE_SIZE) v9 = true;
+  }
+  return current || v2 || v3 || v4 || v5 || v6 || v7 || v8 || v9;
+}
+
 bool TakConfig::load() {
+  _load_failed = false;
   setDefaults();
   // Read-link certificate from builds that had TAK -> mesh chat.
   for (const char* old : {"/tak/rx-client.pem", "/tak/rx-client.key"}) {
     if (SPIFFS.exists(old)) SPIFFS.remove(old);
   }
-  if (!SPIFFS.exists("/tak/config.bin")) {
-    // Keep the fixed SoftAP password from setDefaults() ("meshcoretak")
+  if (!SPIFFS.exists(CFG_PATH) && !SPIFFS.exists(CFG_BAK)) {
     return false;
   }
-  File f = SPIFFS.open("/tak/config.bin", "r");
-  if (!f) return false;
-  // Several KB since v9; the loop task stack cannot hold a second copy.
+
   std::unique_ptr<TakPrefs> holder(new (std::nothrow) TakPrefs);
   if (!holder) {
-    f.close();
+    _load_failed = SPIFFS.exists(CFG_PATH);
     return false;
   }
   TakPrefs& tmp = *holder;
-  memcpy(&tmp, &prefs, sizeof(tmp));  // defaults for any fields the file lacks
-  size_t n = f.read((uint8_t*)&tmp, sizeof(tmp));
-  f.close();
-  bool current = (n == sizeof(tmp) && tmp.version == TAK_CONFIG_VERSION);
-  bool v2 = (n == TAK_PREFS_V2_SIZE && tmp.version == 2);
-  bool v3 = (n == TAK_PREFS_V3_SIZE && tmp.version == 3);
-  bool v4 = (n == TAK_PREFS_V4_SIZE && tmp.version == 4);
-  bool v5 = (n == TAK_PREFS_V5_SIZE && tmp.version == 5);
-  bool v6 = (n == TAK_PREFS_V6_SIZE && tmp.version == 6);
-  bool v7 = (n == TAK_PREFS_V7_FILE_SIZE && tmp.version == 7);
-  bool v8 = (n == TAK_PREFS_V8_FILE_SIZE && tmp.version == 8);
-  if (!current && !v2 && !v3 && !v4 && !v5 && !v6 && !v7 && !v8) {
-    return false;
+  memcpy(&tmp, &prefs, sizeof(tmp));
+
+  size_t n = 0;
+  bool from_backup = false;
+  if (!readPrefsFile(CFG_PATH, tmp, n)) {
+    memcpy(&tmp, &prefs, sizeof(tmp));
+    if (!readPrefsFile(CFG_BAK, tmp, n)) {
+      _load_failed = SPIFFS.exists(CFG_PATH) || SPIFFS.exists(CFG_BAK);
+      return false;
+    }
+    from_backup = true;
+    Serial.println("[CFG] primary config unreadable, using backup");
   }
+
+  bool current = false, v2 = false, v3 = false, v4 = false, v5 = false, v6 = false, v7 = false, v8 = false,
+       v9 = false;
+  if (!acceptVersion(n, tmp.version, current, v2, v3, v4, v5, v6, v7, v8, v9)) {
+    // Try backup if primary looked corrupt.
+    if (!from_backup && SPIFFS.exists(CFG_BAK)) {
+      memcpy(&tmp, &prefs, sizeof(tmp));
+      if (readPrefsFile(CFG_BAK, tmp, n) &&
+          acceptVersion(n, tmp.version, current, v2, v3, v4, v5, v6, v7, v8, v9)) {
+        from_backup = true;
+        Serial.println("[CFG] primary config corrupt, using backup");
+      } else {
+        _load_failed = true;
+        Serial.println("[CFG] config unreadable - leaving file alone");
+        return false;
+      }
+    } else {
+      _load_failed = true;
+      Serial.println("[CFG] config unreadable - leaving file alone");
+      return false;
+    }
+  }
+
   if (v2) tmp.strip_prefix = false;
   if (v7) tmp.rx_port = tmp.tak_port ? tmp.tak_port : 8089;
-  if (v8) tmp.version = TAK_CONFIG_VERSION;  // tracker fields stay at the defaults copied above
-  if (!current && !v7 && !v8) {
+  if (v8 || v9) {
+    // tracker / auto_update fields stay at the defaults copied above for missing tails
+  }
+  if (!current && !v7 && !v8 && !v9) {
     // default everything the old file lacks (its tail padding overlapped the first new bytes)
     size_t from = v6 ? TAK_PREFS_V7_START : v5 ? TAK_PREFS_V6_START : v4 ? TAK_PREFS_V5_START : TAK_PREFS_V4_START;
     memcpy((uint8_t*)&tmp + from, (const uint8_t*)&prefs + from, sizeof(tmp) - from);
@@ -165,6 +229,18 @@ bool TakConfig::load() {
       copyStr(f.match, sizeof(f.match), lists[i]);
       f.cot = tmp.cot;
     }
+  }
+  if (!current) {
+    if (tmp.stale_sec < 600) tmp.stale_sec = 600;  // v10 one-shot raise
+    if (tmp.auto_update > TAK_AUTO_UPDATE_AUTO) tmp.auto_update = TAK_AUTO_UPDATE_AUTO;
+    if (v8 || v9 || v7 || v6 || v5 || v4 || v3 || v2) {
+      // auto_update default already set from setDefaults memcpy above when missing
+      if (v9 || v8 || v7 || v6 || v5 || v4 || v3 || v2) {
+        if (n < offsetof(TakPrefs, auto_update) + sizeof(tmp.auto_update)) {
+          tmp.auto_update = TAK_AUTO_UPDATE_AUTO;
+        }
+      }
+    }
     tmp.version = TAK_CONFIG_VERSION;
   }
   prefs = tmp;
@@ -174,6 +250,8 @@ bool TakConfig::load() {
   if (prefs.tak_port == 0) prefs.tak_port = 8089;
   if (prefs.rx_port == 0) prefs.rx_port = prefs.tak_port;
   if (prefs.public_room[0] == 0) copyStr(prefs.public_room, sizeof(prefs.public_room), "MeshCore");
+  if (prefs.auto_update > TAK_AUTO_UPDATE_AUTO) prefs.auto_update = TAK_AUTO_UPDATE_AUTO;
+  ensureUniqueNodeName();
   if (strcasecmp(prefs.preset, "CUSTOM") != 0) {
     char name[sizeof(prefs.preset)];
     copyStr(name, sizeof(name), prefs.preset);
@@ -182,18 +260,81 @@ bool TakConfig::load() {
   return true;
 }
 
-bool TakConfig::save() {
-  prefs.version = TAK_CONFIG_VERSION;
+bool TakConfig::writePrefsBytes(const uint8_t* data, size_t len) {
   SPIFFS.mkdir("/tak");
-  File f = SPIFFS.open("/tak/config.bin", "w");
+  SPIFFS.remove(CFG_TMP);
+  File f = SPIFFS.open(CFG_TMP, "w");
   if (!f) return false;
-  size_t n = f.write((uint8_t*)&prefs, sizeof(prefs));
+  size_t n = f.write(data, len);
+  f.flush();
   f.close();
-  return n == sizeof(prefs);
+  if (n != len) {
+    SPIFFS.remove(CFG_TMP);
+    return false;
+  }
+  // Keep the previous file as backup, then promote the temp.
+  if (SPIFFS.exists(CFG_PATH)) {
+    SPIFFS.remove(CFG_BAK);
+    if (!SPIFFS.rename(CFG_PATH, CFG_BAK)) {
+      // rename failed: try copy-fallback so we still do not truncate the live file first
+      File src = SPIFFS.open(CFG_PATH, "r");
+      File dst = SPIFFS.open(CFG_BAK, "w");
+      if (src && dst) {
+        uint8_t buf[256];
+        while (src.available()) {
+          int r = src.read(buf, sizeof(buf));
+          if (r > 0) dst.write(buf, r);
+        }
+      }
+      if (src) src.close();
+      if (dst) dst.close();
+      SPIFFS.remove(CFG_PATH);
+    }
+  }
+  if (!SPIFFS.rename(CFG_TMP, CFG_PATH)) {
+    // Last resort: write directly.
+    File out = SPIFFS.open(CFG_PATH, "w");
+    if (!out) return false;
+    File in = SPIFFS.open(CFG_TMP, "r");
+    if (!in) {
+      out.close();
+      return false;
+    }
+    uint8_t buf[256];
+    size_t wrote = 0;
+    while (in.available()) {
+      int r = in.read(buf, sizeof(buf));
+      if (r <= 0) break;
+      wrote += out.write(buf, r);
+    }
+    in.close();
+    out.close();
+    SPIFFS.remove(CFG_TMP);
+    return wrote == len;
+  }
+  return true;
+}
+
+bool TakConfig::save() {
+  if (_load_failed) {
+    Serial.println("[CFG] refusing to overwrite unreadable config");
+    return false;
+  }
+  // While an OTA image is pending verify, keep the on-disk layout at v9 so a
+  // rollback can still read the file.
+  bool write_v10 = TakOtaHealth::mayWriteV10();
+  prefs.version = write_v10 ? TAK_CONFIG_VERSION : 9;
+  size_t len = write_v10 ? sizeof(prefs) : TAK_PREFS_V9_FILE_SIZE;
+  bool ok = writePrefsBytes((const uint8_t*)&prefs, len);
+  prefs.version = TAK_CONFIG_VERSION;  // keep RAM at current schema either way
+  return ok;
 }
 
 void TakConfig::factoryResetNetworkAndTak() {
-  SPIFFS.remove("/tak/config.bin");
+  _load_failed = false;
+  SPIFFS.remove(CFG_PATH);
+  SPIFFS.remove(CFG_TMP);
+  SPIFFS.remove(CFG_BAK);
   SPIFFS.remove(caPath());
   SPIFFS.remove(certPath());
   SPIFFS.remove(keyPath());
