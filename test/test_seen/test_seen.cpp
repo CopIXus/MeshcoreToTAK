@@ -37,3 +37,8 @@ TEST(TakSeen, IgnoresNonMesh) {
   EXPECT_FALSE(s.sawPeer());
   EXPECT_TRUE(s.isNewer("ANDROID-1", 1));
 }
+
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}
