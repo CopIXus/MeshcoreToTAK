@@ -7,14 +7,11 @@ on:
     branches: [main]
     paths:
       - 'examples/tak_gateway/**'
-      - 'examples/meshcore_tracker/**'
       - 'src/**'
+      - 'lib/**'
+      - 'arch/esp32/**'
       - 'variants/heltec_v3/**'
-      - 'variants/lilygo_tbeam_SX1262/**'
-      - 'variants/lilygo_tbeam_SX1276/**'
       - 'platformio.ini'
-      - 'CHANGELOG.md'
-      - 'README.md'
       - '.github/workflows/tak-gateway-release.yml'
   workflow_dispatch:
 
@@ -34,6 +31,8 @@ jobs:
     steps:
       - name: Clone Repo
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Version
         id: v
@@ -61,11 +60,18 @@ jobs:
           VER: ${{ steps.v.outputs.version }}
         run: |
           B=".pio/build/$PIO_ENV"
+          MAX_SIZE=3342336
           mkdir -p out
           cp "$B/firmware.bin" out/tak_gateway_heltec_v3.bin
           cp "$B/firmware-merged.bin" out/tak_gateway_heltec_v3_full.bin
-          printf '%s\n%s\n%s\n' "$VER" "$(md5sum out/tak_gateway_heltec_v3.bin | cut -d' ' -f1)" \
-            "$(stat -c%s out/tak_gateway_heltec_v3.bin)" > out/version.txt
+          SIZE=$(stat -c%s out/tak_gateway_heltec_v3.bin)
+          if [ "$SIZE" -gt "$MAX_SIZE" ]; then
+            echo "firmware.bin size ${SIZE} exceeds limit ${MAX_SIZE} (0x330000)"
+            exit 1
+          fi
+          MD5=$(md5sum out/tak_gateway_heltec_v3.bin | cut -d' ' -f1)
+          SHA256=$(sha256sum out/tak_gateway_heltec_v3.bin | cut -d' ' -f1)
+          printf '%s\n%s\n%s\n%s\n' "$VER" "$MD5" "$SIZE" "$SHA256" > out/version.txt
           {
             echo "MeshCore TAK Gateway for Heltec V3, version **$VER** (UTC $(date -u -d @"$(git log -1 --format=%ct)" '+%Y-%m-%d %H:%M')Z)."
             echo
@@ -73,16 +79,28 @@ jobs:
             echo "  (or upload \`tak_gateway_heltec_v3.bin\` there)."
             echo "- **First install over USB:** flash \`tak_gateway_heltec_v3_full.bin\` at offset 0x0."
             echo
+            NOTES_MODE=git
             if [ -f CHANGELOG.md ]; then
-              echo "## Changes"
-              echo
-              awk '
+              UNRELEASED=$(awk '
                 /^## [Uu]nreleased/ { show=1; next }
                 /^## / { if (show) exit }
                 show { print }
-              ' CHANGELOG.md
+              ' CHANGELOG.md)
+              if [ -n "$(printf '%s' "$UNRELEASED" | sed '/^[[:space:]]*$/d' | head -1)" ]; then
+                NOTES_MODE=changelog
+              fi
+            fi
+            echo "## Changes"
+            echo
+            if [ "$NOTES_MODE" = changelog ]; then
+              printf '%s\n' "$UNRELEASED"
             else
-              echo "Changes: $(git log -1 --format=%s)"
+              PREV=$(git tag -l --merged HEAD --sort=-creatordate | grep -Ev '^tracker-' | head -1 || true)
+              if [ -n "$PREV" ]; then
+                git log "$PREV..HEAD" --format='- %s'
+              else
+                git log -20 --format='- %s'
+              fi
             fi
           } > out/notes.md
           cat out/version.txt

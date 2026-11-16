@@ -4,6 +4,7 @@
 #include "TakConfig.h"
 #include "TakNodes.h"
 #include "TakTrackers.h"
+#include "TakSeen.h"
 
 enum class TakLinkState : uint8_t {
   Disabled = 0,
@@ -124,7 +125,10 @@ public:
   TakChatStats chat;
   TakLinkStats link;
   TakInTrace inbound;
+  TakSeen seen;
   int queued() const { return _q_count; }
+  // True once inbound traffic included another gateway's mesh marker.
+  bool seesPeers() const { return seen.sawPeer(); }
 
   TakLinkState state() const { return _state; }
   const char* stateName() const;
@@ -149,7 +153,10 @@ private:
   unsigned long _next_refresh = 0;
   unsigned long _last_ping_ms = 0;
   unsigned long _net_ok_ms = 0;
+  unsigned long _settle_until_ms = 0;  // hold position sends after reconnect
   uint32_t _backoff_ms = 1000;
+  bool _async_tls = false;  // handshake in progress via esp_tls_conn_new_async
+  bool _async_skip_cn = false;
 
   // Only held while a handshake is being set up; the CA lives in the esp_tls global store.
   bool _ca_ok = false;
@@ -183,7 +190,9 @@ private:
   void setError(const char* msg);
   void setState(TakLinkState s);
   bool loadCertPems();
-  bool connectTls();
+  bool startTlsAsync();
+  void pollTlsAsync();
+  void finishTlsConnected();
   void disconnectTls();
   bool drainInbound();
   bool queuePing();
@@ -195,4 +204,6 @@ private:
   void processRefreshExpire();
   void bumpBackoff();
   void captureTlsError(const char* prefix);
+  void noteInboundUid(const char* uid, int64_t time_ms);
+  bool settled() const { return !_settle_until_ms || (long)(millis() - _settle_until_ms) >= 0; }
 };
