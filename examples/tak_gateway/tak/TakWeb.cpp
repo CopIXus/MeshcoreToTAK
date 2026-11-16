@@ -48,6 +48,7 @@ static String g_cert_cn, g_cert_exp;
 // Body callbacks run before middleware, so uploads must check credentials themselves;
 // the middleware then answers 401 once the body has been consumed.
 static bool authed(AsyncWebServerRequest* req) { return g_auth.allowed(req); }
+static String jsonEsc(const String& s);
 
 static String jsonField(const String& body, const char* key) {
   String needle = String("\"") + key + "\"";
@@ -367,6 +368,9 @@ void TakWeb::setupRoutes() {
         setu(p.stale_sec, "stale_sec", 10, 65535);
         setu(p.refresh_sec, "refresh_sec", 10, 65535);
         setu(p.max_age_sec, "max_age_sec", 60, 65535);
+        if (jsonGet(body, "auto_update", v) && v.length()) {
+          p.auto_update = (uint8_t)constrain(v.toInt(), 0, 2);
+        }
         setb(p.enabled, "enabled");
         setb(p.cot.archived, "cot_archived");
 
@@ -625,6 +629,40 @@ void TakWeb::setupRoutes() {
     req->send(200, "text/plain", clock_ok ? "Advert sent" : "Advert queued - waiting for the clock (NTP)");
   });
 
+  g_server->on("/api/certs", HTTP_GET, [](AsyncWebServerRequest* req) {
+    if (!g_cfg || !authed(req)) {
+      req->send(401, "text/plain", "auth");
+      return;
+    }
+    auto hex = [](const uint8_t* p, uint8_t n) {
+      String s;
+      s.reserve(n * 2);
+      for (uint8_t i = 0; i < n; i++) {
+        char b[3];
+        sprintf(b, "%02x", p[i]);
+        s += b;
+      }
+      return s;
+    };
+    const TakPrefs& p = g_cfg->prefs;
+    String j = "{";
+    j += "\"ca\":\"" + jsonEsc(g_cfg->readFile(g_cfg->caPath())) + "\",";
+    j += "\"cert\":\"" + jsonEsc(g_cfg->readFile(g_cfg->certPath())) + "\",";
+    j += "\"key\":\"" + jsonEsc(g_cfg->readFile(g_cfg->keyPath())) + "\",";
+    j += "\"channels\":[";
+    for (int i = 0; i < TAK_MAX_CHAT; i++) {
+      const TakChatChannel& c = p.chat[i];
+      if (i) j += ",";
+      j += "{\"name\":\"" + jsonEsc(String(c.name)) + "\",";
+      j += "\"on\":" + String(c.enabled ? 1 : 0) + ",";
+      j += "\"trk\":" + String(p.tracker_ch[i].enabled ? 1 : 0) + ",";
+      j += "\"room\":\"" + jsonEsc(String(c.room)) + "\",";
+      j += "\"key\":\"" + hex(c.secret, c.secret_len) + "\"}";
+    }
+    j += "]}";
+    req->send(200, "application/json", j);
+  });
+
   g_server->on(
       "/api/certs", HTTP_POST,
       [](AsyncWebServerRequest* req) {},
@@ -810,18 +848,46 @@ String TakWeb::statusJson() const {
   j += "\"rx_ago\":\"" + (rx.packets ? String((millis() - rx.last_rx_ms) / 1000UL) + "s" : String("")) + "\",";
   j += "\"rx_rssi\":" + String(rx.last_rssi, 0) + ",";
   j += "\"rx_snr\":" + String(rx.last_snr, 1) + ",";
+  {
+    float best_r = 0, med_r = 0, best_s = 0;
+    uint16_t dn = 0, rn = 0;
+    bool have = rx.directStats(millis(), 600000UL, best_r, med_r, best_s, dn, rn);
+    j += String("\"sig_have\":") + (have ? "true" : "false") + ",";
+    j += "\"sig_best_rssi\":" + String(best_r, 0) + ",";
+    j += "\"sig_med_rssi\":" + String(med_r, 0) + ",";
+    j += "\"sig_best_snr\":" + String(best_s, 1) + ",";
+    j += "\"sig_direct\":" + String(dn) + ",";
+    j += "\"sig_relayed\":" + String(rn) + ",";
+    j += "\"sig_noise\":" + String(rx.noise_floor, 0) + ",";
+    j += String("\"sig_boost\":") + (rx.rx_boost ? "true" : "false") + ",";
+    j += "\"mt1_ignored\":" + String(rx.mt1_ignored) + ",";
+    const char* verdict = "Nothing heard yet";
+    if (rx.packets && (millis() - rx.last_rx_ms) > 1800000UL) verdict = "Nothing heard for 30 min - check preset";
+    else if (have && best_r >= -70) verdict = "Direct signals strong";
+    else if (have && best_r < -100) verdict = "Every direct signal is weak - if a node is in sight, check the antenna connector";
+    else if (!have && rn) verdict = "Only hearing repeaters";
+    else if (have) verdict = "Direct signals OK";
+    else if (rx.noise_floor > -90) verdict = "High noise floor - interference near the gateway";
+    j += "\"sig_verdict\":\"" + jsonEsc(String(verdict)) + "\",";
+  }
   j += "\"adverts\":" + String(rx.adverts) + ",";
   j += "\"adverts_gps\":" + String(rx.adverts_gps) + ",";
   j += "\"last_advert\":\"" + jsonEsc(String(rx.last_advert_name)) + "\",";
   j += String("\"last_advert_gps\":") + (rx.last_advert_gps ? "true" : "false") + ",";
   j += "\"nodes\":" + String(_cfg ? tak_nodes.sentCount(_cfg->prefs) : tak_nodes.count()) + ",";
-  // GPS nodes heard (name, seconds ago) so the page can test filter rules live
+  if (_client) {
+    j += String("\"tak_peers\":") + (_client->seesPeers() ? "true" : "false") + ",";
+    j += "\"tak_superseded\":" + String(_client->seen.superseded()) + ",";
+  }
+  // GPS nodes heard (name, age, rssi, snr, hops) so the page can test filter rules live
   j += "\"gps_nodes\":[";
   for (int i = 0; i < tak_nodes.count(); i++) {
     const TakNodeRecord* n = tak_nodes.at(i);
     if (!n) continue;
     if (i) j += ",";
-    j += "[\"" + jsonEsc(String(n->name)) + "\"," + String((millis() - n->last_heard_ms) / 1000UL) + "]";
+    j += "[\"" + jsonEsc(String(n->name)) + "\"," + String((millis() - n->last_heard_ms) / 1000UL) + "," +
+         String(n->rssi, 0) + "," + String(n->snr, 1) + "," + String(n->hops) + "," +
+         String(n->superseded ? "true" : "false") + "]";
   }
   j += "],";
   const TakTrackerStats& ts = tak_trackers.stats;
@@ -831,6 +897,7 @@ String TakWeb::statusJson() const {
   j += "\"trk_old\":" + String(ts.out_of_order) + ",";
   j += "\"trk_bad\":" + String(ts.parse_errors) + ",";
   j += "\"trk_sent\":" + String(ts.sent) + ",";
+  j += "\"trk_superseded\":" + String(ts.superseded) + ",";
   j += "\"trackers\":[";
   bool trk_first = true;
   for (int i = 0; i < tak_trackers.count(); i++) {
@@ -854,6 +921,8 @@ String TakWeb::statusJson() const {
     j += "\"age\":" + String(age) + ",";
     j += "\"rssi\":" + String(t->rssi, 0) + ",";
     j += "\"snr\":" + String(t->snr, 1) + ",";
+    j += "\"hops\":" + String(t->hops) + ",";
+    j += String("\"sup\":") + (t->superseded ? "true" : "false") + ",";
     j += "\"clk\":\"" + String(t->time_fallback ? "gw" : "gps") + "\",";
     j += "\"tak_ago\":" + tak_ago + "}";
   }
@@ -925,6 +994,9 @@ String TakWeb::statusJson() const {
   j += "\"upd_msg\":\"" + jsonEsc(String(tak_update.message())) + "\",";
   j += "\"upd_checked_ago\":" + ago(tak_update.checkedMs()) + ",";
   j += "\"upd_url\":\"" + String(TakUpdate::releaseUrl()) + "\",";
+  j += "\"upd_auto\":" + String(tak_update.autoMode()) + ",";
+  j += "\"upd_skip\":\"" + jsonEsc(String(tak_update.skippedVersion())) + "\",";
+  j += "\"upd_skip_why\":\"" + jsonEsc(String(tak_update.skipReason())) + "\",";
   j += String("\"logo\":") + (_cfg && SPIFFS.exists(_cfg->logoPath()) ? "true" : "false");
   j += "}";
   return j;
@@ -948,6 +1020,7 @@ String TakWeb::configJson() const {
     j += "\"stale_sec\":\"" + String(_cfg->prefs.stale_sec) + "\",";
     j += "\"refresh_sec\":\"" + String(_cfg->prefs.refresh_sec) + "\",";
     j += "\"max_age_sec\":\"" + String(_cfg->prefs.max_age_sec) + "\",";
+    j += "\"auto_update\":\"" + String(_cfg->prefs.auto_update) + "\",";
     j += "\"cot_type\":\"" + jsonEsc(String(_cfg->prefs.cot.type)) + "\",";
     j += "\"cot_how\":\"" + jsonEsc(String(_cfg->prefs.cot.how)) + "\",";
     j += "\"cot_remarks\":\"" + jsonEsc(String(_cfg->prefs.cot.remarks)) + "\",";

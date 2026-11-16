@@ -10,6 +10,7 @@
 #include "esp_err.h"
 #include "mbedtls/error.h"
 #include "lwip/sockets.h"
+#include "esp_sntp.h"
 
 #define TLS ((esp_tls_t*)_tls)
 
@@ -79,10 +80,18 @@ time_t TakClient::nowUtc() const {
 }
 
 void TakClient::disconnectTls() {
+  _async_tls = false;
   if (_tls) {
     esp_tls_conn_destroy(TLS);
     _tls = nullptr;
   }
+}
+
+void TakClient::noteInboundUid(const char* uid, int64_t time_ms) {
+  if (!uid || !TakSeen::isMeshUid(uid) || time_ms <= 0) return;
+  // Ignore our own gateway contact uid; only peer mesh markers matter.
+  if (_gw_uid[0] && strcmp(uid, _gw_uid) == 0) return;
+  seen.note(uid, time_ms);
 }
 
 static esp_err_t formatTlsError(esp_tls_t* tls, const char* prefix, char* msg, size_t n) {
@@ -242,7 +251,7 @@ bool TakClient::openSession(void*& slot, const String& cert, const String& key, 
   return true;
 }
 
-bool TakClient::connectTls() {
+bool TakClient::startTlsAsync() {
   if (!_cfg->hasTakHost()) {
     setError("no TAK host");
     return false;
@@ -254,23 +263,98 @@ bool TakClient::connectTls() {
   if (WiFi.hostByName(_cfg->prefs.tak_host, ip)) {
     Serial.printf("[TAK] DNS %s -> %s\n", _cfg->prefs.tak_host, ip.toString().c_str());
   }
-  bool opened = openSession(_tls, _cert_pem, _key_pem, _cfg->prefs.tak_port, "publish", nullptr, 0);
-  _cert_pem = String();
-  _key_pem = String();
-  if (!opened) {
-    disconnectTls();
+  if (_tls) {
+    esp_tls_conn_destroy(TLS);
+    _tls = nullptr;
+  }
+  _tls = esp_tls_init();
+  if (!_tls) {
+    setError("esp_tls_init failed");
     return false;
   }
+  _async_tls = true;
+  _async_skip_cn = _skip_cn;
+  Serial.printf("[TAK] publish connecting (async) %s:%u heap=%u\n", _cfg->prefs.tak_host,
+                (unsigned)(_cfg->prefs.tak_port ? _cfg->prefs.tak_port : 8089), (unsigned)ESP.getFreeHeap());
+  return true;
+}
 
+void TakClient::finishTlsConnected() {
+  _async_tls = false;
+  _cert_pem = String();
+  _key_pem = String();
+  _net_ok_ms = millis();
+  int fd = -1;
+  if (esp_tls_get_conn_sockfd(TLS, &fd) == ESP_OK && fd >= 0) {
+    struct timeval tv = {0, 100000};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  }
   setError("");
   _backoff_ms = 1000;
   _last_ping_ms = millis();
+  _settle_until_ms = millis() + 5000UL;
   _pub.clear();
   link.connects++;
   link.up_since_ms = millis();
   setState(TakLinkState::Connected);
-  Serial.println("[TAK] Connected");
-  return true;
+  Serial.printf("[TAK] publish connected, settling 5s before position sends\n");
+}
+
+void TakClient::pollTlsAsync() {
+  if (!_async_tls || !_tls || !_cfg) return;
+  uint16_t port = _cfg->prefs.tak_port ? _cfg->prefs.tak_port : 8089;
+  esp_tls_cfg_t cfg = {};
+  cfg.use_global_ca_store = true;
+  cfg.clientcert_buf = (const unsigned char*)_cert_pem.c_str();
+  cfg.clientcert_bytes = _cert_pem.length() + 1;
+  cfg.clientkey_buf = (const unsigned char*)_key_pem.c_str();
+  cfg.clientkey_bytes = _key_pem.length() + 1;
+  cfg.common_name = _async_skip_cn ? nullptr : "takserver";
+  cfg.skip_common_name = _async_skip_cn;
+  cfg.timeout_ms = 20000;
+  tls_keep_alive_cfg_t ka = {};
+  ka.keep_alive_enable = true;
+  ka.keep_alive_idle = 60;
+  ka.keep_alive_interval = 15;
+  ka.keep_alive_count = 4;
+  cfg.keep_alive_cfg = &ka;
+
+  // Returns 1 connected, 0 failed, -1 still in progress.
+  int ret = esp_tls_conn_new_async(_cfg->prefs.tak_host, strlen(_cfg->prefs.tak_host), port, &cfg, TLS);
+  if (ret == -1) return;
+  if (ret == 1) {
+    if (!_async_skip_cn) {
+      // connected with CN check
+    } else {
+      _skip_cn = true;
+    }
+    finishTlsConnected();
+    return;
+  }
+  // Failed.
+  char msg[96];
+  esp_err_t why = formatTlsError(TLS, "TLS handshake failed", msg, sizeof(msg));
+  Serial.printf("[TAK] %s\n", msg);
+  esp_tls_conn_destroy(TLS);
+  _tls = nullptr;
+  _async_tls = false;
+  bool unreached = why == ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME || why == ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST ||
+                   why == ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT;
+  if (!unreached) _net_ok_ms = millis();
+  if (!_async_skip_cn && !unreached) {
+    // Retry once without the takserver CN requirement.
+    _async_skip_cn = true;
+    _tls = esp_tls_init();
+    if (_tls) {
+      _async_tls = true;
+      Serial.println("[TAK] publish retry TLS with skip_common_name");
+      return;
+    }
+  }
+  _cert_pem = String();
+  _key_pem = String();
+  setError(msg);
+  bumpBackoff();
 }
 
 bool TakClient::drainInbound() {
@@ -470,6 +554,37 @@ static bool pbString(const uint8_t* start, const uint8_t* end, uint32_t field, c
   return true;
 }
 
+static bool pbFixed64(const uint8_t* start, const uint8_t* end, uint32_t field, uint64_t& out) {
+  const uint8_t* p = start;
+  while (p < end) {
+    uint64_t key = 0;
+    if (pbVarint(p, end, key) != 1) return false;
+    uint32_t fn = (uint32_t)(key >> 3);
+    uint32_t wt = (uint32_t)(key & 7);
+    if (wt == 1) {
+      if ((size_t)(end - p) < 8) return false;
+      if (fn == field) {
+        memcpy(&out, p, 8);
+        return true;
+      }
+      p += 8;
+    } else if (wt == 2) {
+      uint64_t n = 0;
+      if (pbVarint(p, end, n) != 1 || n > (uint64_t)(end - p)) return false;
+      p += (size_t)n;
+    } else if (wt == 0) {
+      uint64_t skip = 0;
+      if (pbVarint(p, end, skip) != 1) return false;
+    } else if (wt == 5) {
+      if ((size_t)(end - p) < 4) return false;
+      p += 4;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+
 static bool typeLooksCot(const char* type) {
   if (!type || strlen(type) < 3 || !strchr(type, '-')) return false;
   for (const char* c = type; *c; c++) {
@@ -594,9 +709,22 @@ void TakClient::processRx(TakInSock& s){
       char type[40] = {0};
       bool got = pbField(msg, msg + msg_len, 2, cot, cot_len) && pbString(cot, cot + cot_len, 1, type, sizeof(type)) &&
                  typeLooksCot(type);
-      if (!got) got = pbString(msg, msg + msg_len, 1, type, sizeof(type)) && typeLooksCot(type);
-      // Server traffic is only counted; the gateway publishes and never relays TAK events to the mesh.
+      if (!got) {
+        got = pbString(msg, msg + msg_len, 1, type, sizeof(type)) && typeLooksCot(type);
+        if (got) {
+          cot = msg;
+          cot_len = msg_len;
+        }
+      }
+      // Server traffic is counted; mesh marker UIDs feed the multi-gateway ordering table.
       noteType(got ? type : "", true);
+      if (got && cot && cot_len) {
+        char uid[80] = {0};
+        uint64_t send_ms = 0;
+        pbString(cot, cot + cot_len, 5, uid, sizeof(uid));
+        pbFixed64(cot, cot + cot_len, 6, send_ms);
+        if (uid[0] && send_ms) noteInboundUid(uid, (int64_t)send_ms);
+      }
       rxConsume(s, frame);
       continue;
     }
@@ -637,6 +765,10 @@ void TakClient::handleEvent(TakInSock& s, const char* ev) {
   noteType(type, false);
   if (!strcmp(type, "t-x-takp-v")) onProtoOffer(s, e);
   else if (!strcmp(type, "t-x-takp-r")) onProtoAnswer(s, e);
+  char uid[80] = {0}, ts[40] = {0};
+  tagAttr(e, "uid", uid, sizeof(uid));
+  tagAttr(e, "time", ts, sizeof(ts));
+  if (uid[0] && ts[0]) noteInboundUid(uid, TakSeen::parseTimeMs(ts));
 }
 
 const char* TakClient::roomFor(int ch) const {
@@ -670,7 +802,7 @@ bool TakClient::queueChat(int ch, const char* sender, const char* text) {
   time_t now = nowUtc();
   if (!now) return false;
   size_t n = TakCot::buildChat(_tx_buf, sizeof(_tx_buf), _gw_uid, roomFor(ch), sender, text,
-                               _cfg->prefs.chat_lat, _cfg->prefs.chat_lon, now);
+                               _cfg->prefs.chat_lat, _cfg->prefs.chat_lon, now, _cfg->prefs.channel_label);
   return n && enqueueXml(_tx_buf, n, TakEvKind::Chat);
 }
 
@@ -1001,23 +1133,49 @@ void TakClient::noteSent(TakEvKind kind, const char* name, const char* role) {
 bool TakClient::queuePoint(const TakNodeRecord& node) {
   if (!_cfg) return false;
   if (!TakNodes::passesFilter(node.name, _cfg->prefs)) return false;
-  time_t now = nowUtc();
-  if (!now) {
+  if (!settled()) return false;
+  time_t cot = node.heard_utc ? node.heard_utc : nowUtc();
+  if (!cot) {
     setError("NTP not ready");
     return false;
   }
-  size_t n = TakCot::buildPoint(_tx_buf, sizeof(_tx_buf), node, _cfg->prefs, now);
+  int64_t tms = TakSeen::timeSecToMs((int64_t)cot);
+  if (!seen.isNewer(node.uid, tms)) {
+    seen.countSuperseded();
+    if (_nodes) {
+      TakNodeRecord* mut = const_cast<TakNodeRecord*>(&node);
+      mut->superseded = true;
+      mut->needs_send = false;
+    }
+    return false;
+  }
+  size_t n = TakCot::buildPoint(_tx_buf, sizeof(_tx_buf), node, _cfg->prefs, cot);
   if (!n) return false;
-  return enqueueXml(_tx_buf, n, TakEvKind::Point, node.name);
+  if (!enqueueXml(_tx_buf, n, TakEvKind::Point, node.name)) return false;
+  seen.note(node.uid, tms);
+  return true;
 }
 
 bool TakClient::queueTrackerPoint(const TakTrackerRecord& rec, const TakCotStyle& style) {
   if (!_cfg || !_cfg->prefs.enabled || !rec.cot_time) return false;
+  if (!settled()) return false;
+  uint16_t stale = _cfg->prefs.stale_sec ? _cfg->prefs.stale_sec : 600;
+  int64_t tms = TakSeen::timeSecToMs((int64_t)rec.cot_time);
+  if (!seen.isNewer(rec.uid, tms)) {
+    seen.countSuperseded();
+    const_cast<TakTrackerRecord&>(rec).superseded = true;
+    const_cast<TakTrackerRecord&>(rec).needs_send = false;
+    tak_trackers.stats.superseded++;
+    return false;
+  }
   size_t n = TakCot::buildTrackerPoint(_tx_buf, sizeof(_tx_buf), rec.uid, rec.callsign, rec.lat, rec.lon,
                                        rec.has_altitude, rec.altitude_m, rec.has_speed, rec.speed_mps, rec.has_course,
-                                       rec.course_deg, style, rec.cot_time, rec.stale_sec);
+                                       rec.course_deg, style, rec.cot_time, stale, _cfg->prefs.node_name,
+                                       _cfg->prefs.channel_label);
   if (!n) return false;
-  return enqueueXml(_tx_buf, n, TakEvKind::Tracker, rec.callsign, rec.role);
+  if (!enqueueXml(_tx_buf, n, TakEvKind::Tracker, rec.callsign, rec.role)) return false;
+  seen.note(rec.uid, tms);
+  return true;
 }
 
 bool TakClient::queuePing() {
@@ -1042,25 +1200,23 @@ bool TakClient::queuePing() {
 bool TakClient::queueDelete(const char* uid) {
   time_t now = nowUtc();
   if (!now || !uid) return false;
-  size_t n = TakCot::buildDelete(_tx_buf, sizeof(_tx_buf), uid, now);
+  size_t n = TakCot::buildDelete(_tx_buf, sizeof(_tx_buf), uid, now, _cfg ? _cfg->prefs.channel_label : nullptr);
   if (!n) return false;
   return enqueueXml(_tx_buf, n, TakEvKind::Delete);
 }
 
 void TakClient::processRefreshExpire() {
   if (!_nodes || !_cfg) return;
-  TakNodeRecord* refresh[TAK_MAX_NODES];
-  TakNodeRecord* expire[TAK_MAX_NODES];
-  int nr = 0, ne = 0;
-  _nodes->collectRefreshAndExpire(millis(), _cfg->prefs.refresh_sec, _cfg->prefs.max_age_sec,
-                                  refresh, TAK_MAX_NODES, nr, expire, TAK_MAX_NODES, ne);
-  for (int i = 0; i < nr; i++) {
-    if (!TakNodes::passesFilter(refresh[i]->name, _cfg->prefs)) continue;
-    if (queuePoint(*refresh[i])) _nodes->markSent(refresh[i], millis());
-  }
-  for (int i = 0; i < ne; i++) {
-    if (expire[i]->last_sent_ms) queueDelete(expire[i]->uid);
-    expire[i]->valid = false;
+  // Local table only: never re-stamp or delete markers that another gateway may still own.
+  _nodes->expireLocal(millis(), _cfg->prefs.max_age_sec);
+  for (int i = 0; i < _nodes->count(); i++) {
+    TakNodeRecord* n = _nodes->at(i);
+    if (!n || !n->valid || !n->needs_send) continue;
+    if (!TakNodes::passesFilter(n->name, _cfg->prefs)) continue;
+    if (queuePoint(*n)) {
+      n->needs_send = false;
+      _nodes->markSent(n, millis());
+    }
   }
 }
 
@@ -1121,7 +1277,10 @@ void TakClient::loop() {
   if (_state == TakLinkState::WaitWifi || _state == TakLinkState::Error) {
     if (WiFi.status() == WL_CONNECTED) {
       setState(TakLinkState::WaitNtp);
+      // Prefer an NTP server handed out by DHCP (option 42); fall back to public pools.
+      sntp_servermode_dhcp(true);
       configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+      Serial.println("[TAK] waiting for NTP (DHCP server if offered, else pool.ntp.org)");
     }
     return;
   }
@@ -1129,12 +1288,21 @@ void TakClient::loop() {
   if (_state == TakLinkState::WaitNtp) {
     if (nowUtc()) {
       _ntp_ok = true;
-      if (!connectTls()) bumpBackoff();
+      if (!startTlsAsync()) bumpBackoff();
+    } else {
+      static unsigned long last_ntp_hint = 0;
+      if (millis() - last_ntp_hint > 30000UL) {
+        last_ntp_hint = millis();
+        setError("Waiting for clock (NTP). If this never clears, the network may block UDP/123.");
+      }
     }
     return;
   }
 
-  if (_state == TakLinkState::Connecting) return;
+  if (_state == TakLinkState::Connecting) {
+    pollTlsAsync();
+    return;
+  }
 
   if (_state == TakLinkState::Connected) {
     if (!_tls) {

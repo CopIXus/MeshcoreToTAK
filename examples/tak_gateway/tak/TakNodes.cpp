@@ -3,10 +3,51 @@
 #include <string.h>
 #include <ctype.h>
 
+void TakRxStats::notePacket(float rssi, float snr, uint8_t hops) {
+  ring[ring_i] = {millis(), rssi, snr, hops};
+  ring_i = (uint8_t)((ring_i + 1) % TAK_RX_RING);
+  if (ring_n < TAK_RX_RING) ring_n++;
+}
+
+bool TakRxStats::directStats(uint32_t now_ms, uint32_t window_ms, float& best_rssi, float& median_rssi,
+                             float& best_snr, uint16_t& direct_n, uint16_t& relayed_n) const {
+  best_rssi = -200;
+  median_rssi = -200;
+  best_snr = -100;
+  direct_n = 0;
+  relayed_n = 0;
+  float direct[TAK_RX_RING];
+  for (uint8_t i = 0; i < ring_n; i++) {
+    const TakRxSample& s = ring[i];
+    if (now_ms - s.ms > window_ms) continue;
+    if (s.hops == 0) {
+      if (s.rssi > best_rssi) best_rssi = s.rssi;
+      if (s.snr > best_snr) best_snr = s.snr;
+      if (direct_n < TAK_RX_RING) direct[direct_n++] = s.rssi;
+    } else {
+      relayed_n++;
+    }
+  }
+  if (!direct_n) return false;
+  // Insertion sort then pick middle.
+  for (uint16_t i = 1; i < direct_n; i++) {
+    float v = direct[i];
+    int j = (int)i - 1;
+    while (j >= 0 && direct[j] > v) {
+      direct[j + 1] = direct[j];
+      j--;
+    }
+    direct[j + 1] = v;
+  }
+  median_rssi = direct[direct_n / 2];
+  return true;
+}
+
 void TakNodes::clear() {
   memset(_nodes, 0, sizeof(_nodes));
   _count = 0;
   _last_heard = nullptr;
+  rx = TakRxStats();
 }
 
 bool TakNodes::hasValidGps(const ContactInfo& c) {
@@ -137,7 +178,8 @@ int TakNodes::oldestSlot() {
   return best;
 }
 
-TakNodeRecord* TakNodes::upsertFromContact(const ContactInfo& contact, const uint8_t* self_pub) {
+TakNodeRecord* TakNodes::upsertFromContact(const ContactInfo& contact, const uint8_t* self_pub, float rssi,
+                                           float snr, uint8_t hops, time_t heard_utc) {
   if (self_pub && memcmp(contact.id.pub_key, self_pub, 32) == 0) {
     return nullptr;  // never track self
   }
@@ -158,7 +200,13 @@ TakNodeRecord* TakNodes::upsertFromContact(const ContactInfo& contact, const uin
   _nodes[slot].lat = ((double)contact.gps_lat) / 1000000.0;
   _nodes[slot].lon = ((double)contact.gps_lon) / 1000000.0;
   _nodes[slot].last_heard_ms = millis();
+  _nodes[slot].heard_utc = heard_utc;
+  _nodes[slot].rssi = rssi;
+  _nodes[slot].snr = snr;
+  _nodes[slot].hops = hops;
   _nodes[slot].pending_delete = false;
+  _nodes[slot].needs_send = true;
+  _nodes[slot].superseded = false;
   _last_heard = &_nodes[slot];
   return &_nodes[slot];  // recorded even if the name filter rejects it; callers check passesFilter()
 }
@@ -189,26 +237,20 @@ void TakNodes::markSent(TakNodeRecord* rec, uint32_t now_ms) {
 }
 
 void TakNodes::markAllForResend() {
-  for (int i = 0; i < TAK_MAX_NODES; i++) _nodes[i].last_sent_ms = 0;
-}
-
-void TakNodes::collectRefreshAndExpire(uint32_t now_ms, uint16_t refresh_sec, uint16_t max_age_sec,
-                                       TakNodeRecord* out_refresh[], int max_refresh, int& n_refresh,
-                                       TakNodeRecord* out_expire[], int max_expire, int& n_expire) {
-  n_refresh = 0;
-  n_expire = 0;
-  uint32_t refresh_ms = (uint32_t)refresh_sec * 1000UL;
-  uint32_t max_age_ms = (uint32_t)max_age_sec * 1000UL;
-
   for (int i = 0; i < TAK_MAX_NODES; i++) {
     if (!_nodes[i].valid) continue;
-    uint32_t age = now_ms - _nodes[i].last_heard_ms;
-    if (age > max_age_ms) {
-      if (n_expire < max_expire) out_expire[n_expire++] = &_nodes[i];
-      continue;
-    }
-    if (_nodes[i].last_sent_ms == 0 || (now_ms - _nodes[i].last_sent_ms) >= refresh_ms) {
-      if (n_refresh < max_refresh) out_refresh[n_refresh++] = &_nodes[i];
+    _nodes[i].last_sent_ms = 0;
+    _nodes[i].needs_send = true;
+  }
+}
+
+void TakNodes::expireLocal(uint32_t now_ms, uint16_t max_age_sec) {
+  uint32_t max_age_ms = (uint32_t)max_age_sec * 1000UL;
+  for (int i = 0; i < TAK_MAX_NODES; i++) {
+    if (!_nodes[i].valid) continue;
+    if (now_ms - _nodes[i].last_heard_ms > max_age_ms) {
+      _nodes[i].valid = false;
+      if (_last_heard == &_nodes[i]) _last_heard = nullptr;
     }
   }
 }

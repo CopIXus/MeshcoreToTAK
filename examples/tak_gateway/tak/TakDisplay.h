@@ -21,15 +21,19 @@ private:
   TakConfig* _cfg = nullptr;
   TakClient* _client = nullptr;
   TakNodes* _nodes = nullptr;
+  static const unsigned long SLEEP_MS = 120000;  // blank OLED after 2 min idle
   Page _page = PageWifi;
   unsigned long _last_draw = 0;
+  unsigned long _last_activity = 0;
   unsigned long _btn_down = 0;
   bool _btn_was = false;
   bool _long_fired = false;
   bool _long_pending = false;
+  bool _asleep = false;
   unsigned long _seen_chat_ms = 0;
 
   void draw();
+  void wake();
   void drawHeader(const char* page);
   void drawChat();
   void drawTak();

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 class TakClient;
+class TakConfig;
 
 enum class TakUpdState : uint8_t { Idle, Checking, Installing, Rebooting, Failed };
 
@@ -10,7 +11,7 @@ enum class TakUpdState : uint8_t { Idle, Checking, Installing, Rebooting, Failed
 // Network work runs in its own task so the mesh and web server keep running meanwhile.
 class TakUpdate {
 public:
-  void begin(TakClient* client) { _client = client; }
+  void begin(TakClient* client, TakConfig* cfg = nullptr);
   void loop();
 
   bool requestCheck();
@@ -30,11 +31,15 @@ public:
   int progress() const { return _progress; }
   const char* message() const { return _msg; }
   unsigned long checkedMs() const { return _checked_ms; }
+  const char* skippedVersion() const;
+  const char* skipReason() const;
+  uint8_t autoMode() const;
 
 private:
-  enum class Job : uint8_t { Check, Install };
+  enum class Job : uint8_t { Check, Install, CheckAndMaybeInstall };
 
   TakClient* _client = nullptr;
+  TakConfig* _cfg = nullptr;
   volatile TakUpdState _state = TakUpdState::Idle;
   volatile bool _running = false;
   volatile bool _uploading = false;
@@ -54,6 +59,7 @@ private:
   bool doInstall(String& err);
   void freeTakLinks();
   void setMsg(TakUpdState s, const char* fmt, ...);
+  String downloadUrl(const char* asset) const;
 };
 
 extern TakUpdate tak_update;

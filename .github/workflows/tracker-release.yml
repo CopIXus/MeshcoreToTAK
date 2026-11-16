@@ -1,0 +1,172 @@
+name: MeshCore Tracker Release
+
+# Tracker firmware is published separately from the TAK gateway so gateway OTA never picks it up.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/meshcore_tracker/**'
+      - 'variants/lilygo_tbeam_SX1262/**'
+      - 'variants/lilygo_tbeam_SX1276/**'
+      - '.github/workflows/tracker-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tracker-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    strategy:
+      matrix:
+        include:
+          - pio_env: Tbeam_SX1276_meshcore_tracker
+            artifact: meshcore_tracker_tbeam_sx1276.bin
+          - pio_env: Tbeam_SX1262_meshcore_tracker
+            artifact: meshcore_tracker_tbeam_sx1262.bin
+    steps:
+      - name: Clone MeshCore
+        uses: actions/checkout@v6
+        with:
+          path: MeshCore
+          fetch-depth: 0
+
+      - name: Clone MeshCoreTracker
+        uses: actions/checkout@v6
+        with:
+          repository: CopIXus/MeshCoreTracker
+          path: MeshCoreTracker
+
+      - name: Version
+        id: v
+        working-directory: MeshCore
+        run: |
+          VER=$(python3 examples/tak_gateway/tools/version.py)
+          TAG="tracker-$VER"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; fi
+          echo "Tracker release tag $TAG (version $VER)"
+
+      - name: Setup Build Environment
+        if: steps.v.outputs.exists != 'true'
+        uses: ./MeshCore/.github/actions/setup-build-environment
+
+      - name: Build ${{ matrix.pio_env }}
+        if: steps.v.outputs.exists != 'true'
+        working-directory: MeshCore
+        env:
+          TAK_GW_VERSION: ${{ steps.v.outputs.version }}
+        run: pio run -e "${{ matrix.pio_env }}"
+
+      - name: Package ${{ matrix.pio_env }}
+        if: steps.v.outputs.exists != 'true'
+        working-directory: MeshCore
+        env:
+          VER: ${{ steps.v.outputs.version }}
+          TAG: ${{ steps.v.outputs.tag }}
+          ARTIFACT: ${{ matrix.artifact }}
+          PIO_ENV: ${{ matrix.pio_env }}
+        run: |
+          B=".pio/build/$PIO_ENV"
+          mkdir -p "out/$TAG"
+          cp "$B/firmware.bin" "out/$TAG/$ARTIFACT"
+          MD5=$(md5sum "out/$TAG/$ARTIFACT" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "out/$TAG/$ARTIFACT")
+          SHA256=$(sha256sum "out/$TAG/$ARTIFACT" | cut -d' ' -f1)
+          printf '%s\n%s\n%s\n%s\n' "$VER" "$MD5" "$SIZE" "$SHA256" > "out/$TAG/${ARTIFACT%.bin}_version.txt"
+
+      - name: Upload release artifacts
+        if: steps.v.outputs.exists != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracker-${{ steps.v.outputs.tag }}-${{ matrix.pio_env }}
+          path: MeshCore/out/${{ steps.v.outputs.tag }}/
+          retention-days: 2
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Clone MeshCore
+        uses: actions/checkout@v6
+        with:
+          path: MeshCore
+          fetch-depth: 0
+
+      - name: Version
+        id: v
+        working-directory: MeshCore
+        run: |
+          VER=$(python3 examples/tak_gateway/tools/version.py)
+          TAG="tracker-$VER"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Download build artifacts
+        if: steps.v.outputs.exists != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tracker-${{ steps.v.outputs.tag }}-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Release notes
+        if: steps.v.outputs.exists != 'true'
+        working-directory: MeshCore
+        env:
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          {
+            echo "MeshCore T-Beam tracker builds, version **$VER**."
+            echo
+            echo "- **SX1276 T-Beam:** \`meshcore_tracker_tbeam_sx1276.bin\`"
+            echo "- **SX1262 T-Beam:** \`meshcore_tracker_tbeam_sx1262.bin\`"
+            echo
+            NOTES_MODE=git
+            if [ -f CHANGELOG.md ]; then
+              UNRELEASED=$(awk '
+                /^## [Uu]nreleased/ { show=1; next }
+                /^## / { if (show) exit }
+                show { print }
+              ' CHANGELOG.md)
+              if [ -n "$(printf '%s' "$UNRELEASED" | sed '/^[[:space:]]*$/d' | head -1)" ]; then
+                NOTES_MODE=changelog
+              fi
+            fi
+            echo "## Changes"
+            echo
+            if [ "$NOTES_MODE" = changelog ]; then
+              printf '%s\n' "$UNRELEASED"
+            else
+              PREV=$(git tag -l --merged HEAD --sort=-creatordate | grep -E '^tracker-' | head -1 || true)
+              if [ -n "$PREV" ]; then
+                git log "$PREV..HEAD" --format='- %s'
+              else
+                git log -20 --format='- %s'
+              fi
+            fi
+          } > ../release-notes.md
+
+      - name: Publish Release
+        if: steps.v.outputs.exists != 'true'
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          shopt -s nullglob
+          FILES=(artifacts/*)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "No tracker artifacts to publish"
+            exit 1
+          fi
+          gh release create "$TAG" "${FILES[@]}" \
+            --title "MeshCore Tracker $TAG" --notes-file release-notes.md --target "$GITHUB_SHA" --latest=false

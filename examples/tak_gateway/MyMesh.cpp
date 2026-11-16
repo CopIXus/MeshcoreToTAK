@@ -181,10 +181,15 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel& channel, mesh::Packe
   }
   if (TakTracker::isTrackerMessage(msg)) {
     if (track_on) {
+      uint8_t hops = pkt ? (uint8_t)pkt->getPathHashCount() : 0;
       tak_trackers.ingest(_client, _cfg->prefs, ch, sender, msg, timestamp, radio_driver.getLastRSSI(),
-                          radio_driver.getLastSNR());
+                          radio_driver.getLastSNR(), hops);
       return;
     }
+    // Never leak !MT1 into TAK chat when parsing is off for this channel.
+    if (_nodes) _nodes->rx.mt1_ignored++;
+    Serial.printf("[TRK] !MT1 ignored ch%d (parsing off)\n", ch);
+    return;
   }
   if (!chat_on) return;
   Serial.printf("[CHAT] mesh ch%d %s hops=%u -> TAK room %s: %s\n", ch, sender,
@@ -209,8 +214,11 @@ void MyMesh::onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path
   (void)is_new;
   (void)path;
 
+  uint8_t hops = (uint8_t)(path_len & 63);
+  float rssi = radio_driver.getLastRSSI();
+  float snr = radio_driver.getLastSNR();
   bool gps = TakNodes::hasValidGps(contact);
-  Serial.printf("[MESH] ADVERT %s hops=%u lat=%ld lon=%ld%s\n", contact.name, (unsigned)(path_len & 63),
+  Serial.printf("[MESH] ADVERT %s hops=%u lat=%ld lon=%ld%s\n", contact.name, (unsigned)hops,
                 (long)contact.gps_lat, (long)contact.gps_lon, gps ? "" : " (no position - not sent to TAK)");
 
   if (!_nodes || !_cfg) return;
@@ -224,8 +232,14 @@ void MyMesh::onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path
   utf8Copy(_nodes->rx.last_advert_name, sizeof(_nodes->rx.last_advert_name), contact.name);
   _nodes->rx.last_advert_gps = gps;
 
+  time_t heard = 0;
+  time_t now = _client ? _client->nowUtc() : 0;
+  time_t adv = (time_t)contact.last_advert_timestamp;
+  if (now && adv && llabs((long long)now - (long long)adv) <= TAK_TRACKER_TIME_SKEW_SEC) heard = adv;
+  else if (now) heard = now;
+
   // GPS is checked first (upsert rejects adverts without a position), then the name rules.
-  TakNodeRecord* rec = _nodes->upsertFromContact(contact, self_id.pub_key);
+  TakNodeRecord* rec = _nodes->upsertFromContact(contact, self_id.pub_key, rssi, snr, hops, heard);
   if (!rec) return;
 
   if (!TakNodes::passesFilter(rec->name, _cfg->prefs)) {
@@ -263,6 +277,9 @@ void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
   _nodes->rx.last_rx_ms = millis();
   _nodes->rx.last_rssi = radio_driver.getLastRSSI();
   _nodes->rx.last_snr = radio_driver.getLastSNR();
+  uint8_t hops = packet ? (uint8_t)packet->getPathHashCount() : 0;
+  _nodes->rx.notePacket(_nodes->rx.last_rssi, _nodes->rx.last_snr, hops);
+  _nodes->rx.noise_floor = radio_driver.getNoiseFloor();
   if (packet->isRouteFlood() && packet->getPathHashCount() >= 1) {
     if (packet->hasTransportCodes()) {
       _nodes->rx.flood_hops_scoped++;

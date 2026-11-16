@@ -3,8 +3,11 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
 
-#define TAK_CONFIG_VERSION 9
+#define TAK_CONFIG_VERSION 10
 #define TAK_MAX_ROLES 8
+#define TAK_AUTO_UPDATE_OFF 0
+#define TAK_AUTO_UPDATE_NOTIFY 1
+#define TAK_AUTO_UPDATE_AUTO 2
 #define TAK_ROLE_KEY_LEN 5
 #define TAK_MAX_TRACKER_OVR 12
 #define TAK_MAX_NODES 32
@@ -82,7 +85,7 @@ struct TakPrefs {
   char tak_host[TAK_HOST_LEN];
   uint16_t tak_port;
   char key_passphrase[TAK_PASS_LEN];
-  char channel_label[TAK_CHANNEL_LABEL_LEN];
+  char channel_label[TAK_CHANNEL_LABEL_LEN];  // TAK Server group, sent as <__group name= role='Team Member'/>
 
   char preset[TAK_PRESET_LEN];  // US / EU / AU / CUSTOM
   float lora_freq;
@@ -141,10 +144,15 @@ struct TakPrefs {
   TakChannelTracker tracker_ch[TAK_MAX_CHAT];
   TakRoleStyle roles[TAK_MAX_ROLES];
   TakTrackerOverride tracker_ovr[TAK_MAX_TRACKER_OVR];
+
+  // ---- v10: OTA auto-install (Off / Notify / Automatic) ----
+  uint8_t auto_update;
 };
 
 // v8 files are the struct as shipped before tracker_ch (includes trailing padding).
 #define TAK_PREFS_V8_FILE_SIZE offsetof(TakPrefs, tracker_ch)
+// v9 files end before auto_update.
+#define TAK_PREFS_V9_FILE_SIZE offsetof(TakPrefs, auto_update)
 
 #define TAK_PREFS_V2_SIZE offsetof(TakPrefs, strip_prefix)
 #define TAK_PREFS_V4_START offsetof(TakPrefs, ui_title)
@@ -164,9 +172,15 @@ public:
   TakPrefs prefs;
 
   void setDefaults();
+  // True when prefs came from a readable file (or its backup). False means first boot
+  // or an unreadable file that must not be overwritten.
   bool load();
   bool save();
   void factoryResetNetworkAndTak();
+  // True when /tak/config.bin exists but could not be parsed (and backup also failed).
+  bool loadFailed() const { return _load_failed; }
+  // Fill TAK-GW-XXXX from the MAC when the name is blank or still the shared default.
+  void ensureUniqueNodeName();
 
   bool hasWifi() const;
   bool hasTakHost() const;
@@ -182,4 +196,9 @@ public:
   String readFile(const char* path) const;
 
   void applyPreset(const char* name);
+
+private:
+  bool _load_failed = false;
+  bool readPrefsFile(const char* path, TakPrefs& out, size_t& n_out);
+  bool writePrefsBytes(const uint8_t* data, size_t len);
 };

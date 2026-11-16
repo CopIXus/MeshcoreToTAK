@@ -153,7 +153,7 @@ void TakTrackers::trySend(TakClient& client, TakTrackerRecord& rec) {
 }
 
 void TakTrackers::ingest(TakClient* client, const TakPrefs& prefs, int channel, const char* sender, const char* text,
-                         uint32_t msg_unix, float rssi, float snr) {
+                         uint32_t msg_unix, float rssi, float snr, uint8_t hops) {
   stats.heard++;
   TakTrackerMessage msg;
   if (!TakTracker::parse(text, msg)) {
@@ -196,12 +196,16 @@ void TakTrackers::ingest(TakClient* client, const TakPrefs& prefs, int channel, 
   rec->has_speed = msg.has_speed;
   rec->has_course = msg.has_course;
   rec->has_altitude = msg.has_altitude;
-  rec->stale_sec = msg.stale_sec;
+  // Gateway stale setting wins so markers stay up for 10 minutes across all gateways.
+  rec->stale_sec = prefs.stale_sec ? prefs.stale_sec : 600;
+  (void)msg.stale_sec;
   rec->sequence = msg.sequence;
   rec->msg_unix = msg_unix;
   rec->last_heard_ms = now_ms;
   rec->rssi = rssi;
   rec->snr = snr;
+  rec->hops = hops;
+  rec->superseded = false;
 
   time_t now = client ? client->nowUtc() : 0;
   time_t msg_time = (time_t)msg_unix;

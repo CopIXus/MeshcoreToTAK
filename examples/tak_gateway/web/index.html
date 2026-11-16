@@ -222,6 +222,9 @@ button:disabled{opacity:.45;cursor:default}
 <div><label class=l>SF</label><input name=lora_sf></div><div><label class=l>CR</label><input name=lora_cr></div>
 </div>
 <p class=hint>Must match your mesh exactly. US preset: 910.525 MHz, BW 62.5, SF7, CR5.</p>
+<h3>Antenna check</h3>
+<p class=hint id=antHint>Put a tracker within about 3 m, then start the test. Passes if a direct (0-hop) packet arrives stronger than −70 dBm within 60 seconds.</p>
+<div class=row><button type=button class=s id=antBtn onclick=antennaTest()>Start antenna test</button><span id=antStat class=hint></span></div>
 </section>
 
 <section class="card cl" id=c_map><h2><span class=ti>Map marker (CoT)</span><span class=sum id=s_map></span></h2>
@@ -308,13 +311,13 @@ button:disabled{opacity:.45;cursor:default}
 <h3>Timing</h3>
 <div class=g>
 <div><label class=l>Stale after <span class=dur id=d_stale_sec></span></label><input name=stale_sec type=number min=10 max=65535>
-<div class=chips data-f=stale_sec><button type=button data-v=60>1m</button><button type=button data-v=180>3m</button><button type=button data-v=300>5m</button><button type=button data-v=900>15m</button><button type=button data-v=3600>1h</button></div></div>
+<div class=chips data-f=stale_sec><button type=button data-v=60>1m</button><button type=button data-v=300>5m</button><button type=button data-v=600>10m</button><button type=button data-v=900>15m</button><button type=button data-v=3600>1h</button></div></div>
 <div><label class=l>Re-send every <span class=dur id=d_refresh_sec></span></label><input name=refresh_sec type=number min=10 max=65535>
 <div class=chips data-f=refresh_sec><button type=button data-v=30>30s</button><button type=button data-v=60>1m</button><button type=button data-v=300>5m</button></div></div>
 <div><label class=l>Remove after <span class=dur id=d_max_age_sec></span></label><input name=max_age_sec type=number min=60 max=65535>
 <div class=chips data-f=max_age_sec><button type=button data-v=1800>30m</button><button type=button data-v=7200>2h</button><button type=button data-v=21600>6h</button><button type=button data-v=50400>14h</button></div></div>
 </div>
-<p class=hint>Stale: when TAK greys the marker out. Remove: drop a node that has not advertised for this long (repeaters advert about every 12 h).</p>
+<p class=hint>Stale: when TAK greys the marker out (default 10 minutes for every MeshCore marker). Remove: how long a node stays in this gateway's heard list after the last advert.</p>
 </section>
 
 <section class="card cl" id=c_chat><h2><span class=ti>MeshCore chat &rarr; TAK</span><span class=sum id=s_chat></span></h2>
@@ -344,7 +347,8 @@ button:disabled{opacity:.45;cursor:default}
 
 <section class="card cl" id=c_node><h2><span class=ti>Gateway node</span><span class=sum id=s_node></span><small id=advStat></small></h2>
 <div class=g>
-<div><label class=l>Node name</label><input name=node_name maxlength=31 placeholder=TAK-GW></div>
+<div><label class=l>Gateway name</label><input name=node_name maxlength=31 placeholder=TAK-GW-XXXX>
+<p class=hint id=nameHint>Shown in every marker's remarks so you can see which gateway pushed it. The default includes a unique suffix from this radio's MAC.</p></div>
 <div><label class=l>Latitude</label><input name=chat_lat inputmode=decimal placeholder="e.g. 36.1627"></div>
 <div><label class=l>Longitude</label><input name=chat_lon inputmode=decimal placeholder="e.g. -86.7816"></div>
 </div>
@@ -383,10 +387,16 @@ button:disabled{opacity:.45;cursor:default}
 <p class=hint>Sign in to this page as <b>admin</b>. The default password is <b>meshcore</b>; change it before putting the gateway on a shared network. After a change your browser asks you to sign in again.</p>
 <h3>Firmware</h3>
 <div class=kv id=fwKv style="margin-top:0"></div>
+<div><label class=l>Auto-update</label>
+<select name=auto_update>
+<option value=2>Automatic - install when a newer release is found</option>
+<option value=1>Notify only - show on this page, install manually</option>
+<option value=0>Off - do not check GitHub</option>
+</select></div>
 <div class=row><button type=button class=s onclick=checkUpdate()>Check for updates</button>
 <button type=button id=fwInstall onclick=installUpdate()>Install update</button>
 <a id=fwNotes target=_blank rel=noopener style="color:var(--acc);font-size:.84rem">Release notes</a></div>
-<p class=hint>Versions are the UTC (Zulu) time the code was finished: YY.MMDD.HHMM. The gateway checks GitHub every 6 hours. Updating keeps all settings, keys and certificates.</p>
+<p class=hint>Versions are the UTC (Zulu) time the code was finished: YY.MMDD.HHMM. With Automatic selected the gateway checks GitHub every 6 hours and installs on its own. A bad build rolls back to the previous firmware. Updating keeps all settings, keys and certificates.</p>
 <label class=l style="margin-top:12px">Or upload a firmware file</label>
 <div class=row style="margin-top:0"><input type=file id=fwFile accept=".bin" style="flex:1;min-width:200px"><button type=button class=s onclick=uploadFw()>Upload &amp; install</button></div>
 <p class=hint>Use <b>tak_gateway_heltec_v3.bin</b> from a GitHub release (not the _full file, which is for USB flashing).</p>
@@ -428,16 +438,20 @@ function setStatus(j){
   const trk=j.trackers||[],blk=j.heap_block||0,slow=+j.loop_worst_ms>=500;
   /* [label, value, [sub lines], state, tooltip]; a sub line starting with "!" is highlighted */
   const M=[
-    ['TAK server',ok?'Connected':words(st),ok?['for '+rel(j.tak_up)+(j.tak_connects>1?' · '+j.tak_connects+' sessions':''),'last sent '+ago(j.tak_tx_ago)]:
+    ['TAK server',ok?'Connected':words(st),ok?['for '+rel(j.tak_up)+(j.tak_connects>1?' · '+j.tak_connects+' sessions':''),'last sent '+ago(j.tak_tx_ago),
+      'Sees other gateways\' markers: '+(j.tak_peers?'yes':'not yet')]:
       [(j.tak_host||'host not set')+':'+(j.tak_port||'?'),j.tak_connects?'was up '+j.tak_connects+'× since boot':'not connected yet'],
       ok?'ok':bad?'bad':'warn',(j.tak_host||'')+':'+(j.tak_port||'')],
     ['Adverts to TAK',j.tak_points??'—',[(j.nodes||0)+' on map · '+(j.tak_removed||0)+' removed',j.tak_points?'last '+j.tak_point_name+' · '+ago(j.tak_point_ago):'none yet']
-      .concat(j.tak_dropped?['!'+j.tak_dropped+' dropped (queue full)']:[]),j.tak_points?'ok':'','Advert marker updates written to the TAK server, including refreshes'],
+      .concat(j.tak_superseded?['!'+j.tak_superseded+' superseded by another gateway']:[]).concat(j.tak_dropped?['!'+j.tak_dropped+' dropped (queue full)']:[]),j.tak_points?'ok':'','Advert markers; sent once per hearing, never re-stamped'],
     ['Trackers to TAK',j.tak_trackers??'—',[trk.length+' tracked · '+(j.trk_heard||0)+' heard',j.tak_trackers?'last '+j.tak_trk_name+' · '+ago(j.tak_trk_ago):'none yet']
-      .concat(j.trk_bad?['!'+j.trk_bad+' unreadable']:[]),j.tak_trackers?'ok':'','Tracker fixes written to the TAK server'],
+      .concat(j.trk_bad?['!'+j.trk_bad+' unreadable']:[]).concat(j.trk_superseded?['!'+j.trk_superseded+' superseded']:[]).concat(j.mt1_ignored?['!'+j.mt1_ignored+' !MT1 with parsing off']:[]),j.tak_trackers?'ok':'','Tracker fixes written to the TAK server'],
     ['Chat to TAK',j.chat_m2t||0,['mesh → TAK','last '+ago(j.chat_ago)]],
+    ['Antenna / signal',j.sig_verdict||'—',[j.sig_have?('best direct '+j.sig_best_rssi+' dBm · median '+j.sig_med_rssi+' · SNR '+j.sig_best_snr):'no direct samples',
+      (j.sig_direct||0)+' direct · '+(j.sig_relayed||0)+' relayed · noise '+(j.sig_noise??'—')+' dBm'],
+      /weak|Only hearing|Nothing heard|High noise/i.test(j.sig_verdict||'')?'warn':j.sig_have?'ok':'','Best zero-hop RSSI over the last 10 minutes'],
     ['Mesh packets',j.rx_packets??'—',[(rxOld&&j.rx_packets?'!':'')+'last '+ago(j.rx_last_ago),
-      (j.rx_packets?'RSSI '+j.rx_rssi+' · SNR '+j.rx_snr:'')+((j.flood_hops||j.flood_hops_scoped)?' · flood '+(j.flood_hops||0)+' · scoped '+(j.flood_hops_scoped||0):'')],
+      (j.rx_packets?'last pkt '+j.rx_rssi+' / '+j.rx_snr:'')+((j.flood_hops||j.flood_hops_scoped)?' · flood '+(j.flood_hops||0)+' · scoped '+(j.flood_hops_scoped||0):'')],
       j.rx_packets?(rxOld?'warn':'ok'):'warn'],
     ['Adverts heard',j.adverts??'—',[(j.adverts_gps||0)+' with GPS · last GPS '+ago(j.gps_ago),
       j.last_advert?j.last_advert+' · '+ago(j.adv_heard_ago):'none yet']],
@@ -505,9 +519,12 @@ function fwUi(j){
       '<div class=pb><i style="width:'+(j.upd_state==='rebooting'?100:j.upd_progress)+'%"></i></div></div>':
     fail?'<div><b>Update failed:</b> '+esc(j.upd_msg)+'</div><button type=button onclick=installUpdate()>Try again</button>':'';
   const st=j.upd_avail?'<span style="color:var(--acc)">update available</span>':j.upd_latest?(j.upd_latest===j.fw?'up to date':j.upd_latest<j.fw?'newer than GitHub':''):'';
+  const autoN=['Off','Notify only','Automatic'][j.upd_auto|0]||'Automatic';
   $('fwKv').innerHTML='<b>Installed</b><span>'+esc(fv(j.fw))+' <span class=hint>'+esc(vWhen(j.fw))+'</span></span>'+
     '<b>On GitHub</b><span>'+(j.upd_latest?esc(fv(j.upd_latest))+' · '+st:'not checked yet')+
       (j.upd_checked_ago!=null?' <span class=hint>checked '+esc(ago(j.upd_checked_ago))+'</span>':'')+'</span>'+
+    '<b>Auto-update</b><span>'+esc(autoN)+'</span>'+
+    (j.upd_skip?'<b>Skipped</b><span class=err>'+esc(fv(j.upd_skip))+(j.upd_skip_why?' · '+esc(j.upd_skip_why):'')+'</span>':'')+
     (j.upd_msg?'<b>Status</b><span'+(j.upd_state==='failed'?' class=err':'')+'>'+esc(j.upd_msg)+'</span>':'');
   $('fwInstall').classList.toggle('hide',!j.upd_avail);$('fwNotes').href=j.upd_url||'#';
   $('s_sys').textContent='v'+fv(j.fw)+(j.upd_avail?' · update '+fv(j.upd_latest)+' available':j.upd_latest===j.fw?' · up to date':'');
@@ -746,10 +763,26 @@ function gpsUi(){
   const g=lastStatus.gps_nodes||[];
   if(!g.length){$('gpsList').innerHTML='<p class=hint>No GPS nodes heard since the gateway started. They appear here as adverts arrive.</p>';return}
   const sent=g.filter(x=>matchOf(x[0])!==-2).length;
-  $('gpsList').innerHTML='<div class=gn>'+g.map(([n,ago])=>{const i=matchOf(n),c=callsignOf(n);
-    return '<span class='+(i===-2?'no':'ok')+' title="heard '+esc(dur(ago))+' ago">'+esc(n)+
-      (i!==-2&&c!==n?' → '+esc(c):'')+' · '+esc(chipOf(i))+'</span>'}).join('')+
+  $('gpsList').innerHTML='<div class=gn>'+g.map(row=>{const n=row[0],ago=row[1],rssi=row[2],snr=row[3],hops=row[4],sup=row[5];
+    const i=matchOf(n),c=callsignOf(n);
+    const hop=hops>0?' via '+hops+' hop'+(hops>1?'s':''):' direct';
+    const sig=(rssi!=null?' · '+rssi+'/'+(snr!=null?snr:'?')+'dB':'')+hop+(sup?' · superseded':'');
+    return '<span class='+(i===-2?'no':'ok')+' title="heard '+esc(dur(ago))+' ago'+esc(sig)+'">'+esc(n)+
+      (i!==-2&&c!==n?' → '+esc(c):'')+' · '+esc(chipOf(i))+esc(sig)+'</span>'}).join('')+
     '</div><p class=hint>GPS nodes heard: '+g.length+' · sent: '+sent+(dirty?' (unsaved)':'')+'</p>';
+}
+let antUntil=0;
+async function antennaTest(){
+  antUntil=Date.now()+60000;$('antBtn').disabled=true;$('antStat').textContent='Listening for a strong direct packet…';
+  const startBest=+(lastStatus.sig_best_rssi||-999);
+  const tick=async()=>{
+    await refreshStatus();
+    const best=+(lastStatus.sig_best_rssi||-999),direct=+(lastStatus.sig_direct||0);
+    if(direct>0&&best>=-70){$('antStat').textContent='Pass: direct '+best+' dBm';$('antBtn').disabled=false;antUntil=0;return}
+    if(Date.now()>=antUntil){$('antStat').textContent='No strong direct packet in 60 s - check the antenna connector and preset';$('antBtn').disabled=false;antUntil=0;return}
+    setTimeout(tick,2000);
+  };
+  tick();
 }
 function argb(){
   const c=$('cot_color').value,m=/^#([0-9a-f]{6})$/i.exec(c);if(!m)return -1;
@@ -774,7 +807,7 @@ function preview(){
   const mk=MK.find(m=>m[0]===t);if(mk)label=mk[1]+' · '+t;
   if(mode==='cus'){const si=setIdx($('cot_icon').value);label=(si>=0?IX.set.items[si][1]+' · ':'')+(normIcon($('cot_icon').value)||'(no path)')}
   $('pvType').textContent=label;
-  $('pvMeta').textContent='Stale '+dur(V('stale_sec').value)+' · re-send '+dur(V('refresh_sec').value)+' · remove '+dur(V('max_age_sec').value);
+  $('pvMeta').textContent='Stale '+dur(V('stale_sec').value)+' · remove from local list '+dur(V('max_age_sec').value);
   $('opv').textContent=$('cot_opacity').value+'%';
   for(const n of ['stale_sec','refresh_sec','max_age_sec'])$('d_'+n).textContent=dur(V(n).value);
   $('colHint').textContent=mode==='sym'?'2525 symbols keep their affiliation color on most clients; color still applies in CloudTAK labels and lists.':'';
@@ -852,16 +885,18 @@ function renderTrkLive(){
     const pos=(+t.lat).toFixed(5)+', '+(+t.lon).toFixed(5);
     const spd=t.spd==null?'':(+t.spd).toFixed(1)+' m/s';
     const bat=t.bat<0?'':t.bat+'%';
-    return '<tr><td>'+esc(t.call)+'</td><td>'+esc(t.uid)+'</td><td>'+esc(t.k)+'</td><td>'+esc(t.src)+'</td><td>'+
+    const hop=t.hops>0?'via '+t.hops:'direct';
+    return '<tr><td>'+esc(t.call)+(t.sup?' *':'')+'</td><td>'+esc(t.uid)+'</td><td>'+esc(t.k)+'</td><td>'+esc(t.src)+'</td><td>'+
       (t.ch+1)+'</td><td>'+esc(pos)+'</td><td>'+esc(dur(t.age))+'</td><td>'+esc(spd)+'</td><td>'+esc(bat)+'</td><td>'+
-      t.q+'</td><td>'+t.st+'s</td><td>'+t.rssi+'</td><td>'+t.snr+'</td><td>'+(t.tak_ago==null?'—':esc(dur(t.tak_ago)))+
+      t.q+'</td><td>'+t.st+'s</td><td>'+t.rssi+'</td><td>'+t.snr+'</td><td>'+esc(hop)+'</td><td>'+(t.tak_ago==null?'—':esc(dur(t.tak_ago)))+
       '</td><td>'+esc(t.clk)+'</td></tr>';
   }).join('');
-  $('trkLive').innerHTML='<div class=trkwrap><table class=trk><tr><th>Callsign</th><th>Id</th><th>Role</th><th>Style</th><th>Ch</th><th>Location</th><th>Age</th><th>Speed</th><th>Batt</th><th>Seq</th><th>Stale</th><th>RSSI</th><th>SNR</th><th>TAK</th><th>Clock</th></tr>'+
+  $('trkLive').innerHTML='<div class=trkwrap><table class=trk><tr><th>Callsign</th><th>Id</th><th>Role</th><th>Style</th><th>Ch</th><th>Location</th><th>Age</th><th>Speed</th><th>Batt</th><th>Seq</th><th>Stale</th><th>RSSI</th><th>SNR</th><th>Path</th><th>TAK</th><th>Clock</th></tr>'+
     body+'</table></div><p class=hint>Heard '+(lastStatus.trk_heard||0)+' · accepted '+(lastStatus.trk_ok||0)+
     ' · duplicates '+(lastStatus.trk_dup||0)+' · out of order '+(lastStatus.trk_old||0)+
     ' · bad '+(lastStatus.trk_bad||0)+' · sent '+(lastStatus.trk_sent||0)+
-    '. Clock gps means the radio time was used. gw means the gateway clock was used.</p>';
+    ' · superseded '+(lastStatus.trk_superseded||0)+
+    '. * means another gateway already had newer data. Clock gps means the radio time was used. gw means the gateway clock was used.</p>';
 }
 $('trkCh').onclick=e=>{
   const b=e.target.closest('[data-tc]');if(!b)return;
